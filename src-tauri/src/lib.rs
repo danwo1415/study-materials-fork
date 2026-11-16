@@ -8,6 +8,7 @@ mod net;
 mod network_policy;
 mod playback_log;
 mod session;
+mod source_hub;
 
 use api::Api;
 use tauri::Manager;
@@ -86,7 +87,7 @@ pub fn run() {
                 let resource = url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
                     .find(|(key, _)| key == "u")
                     .map(|(_, value)| playback_log::resource_id(&value));
-                let route = match request.uri().path() { "/hls" => "playlist", "/seg" => "segment_or_key", "/img" => "image", _ => "unknown" };
+                let route = match request.uri().path() { "/hls" => "playlist", "/seg" => "segment_or_key", "/img" => "image", "/offline" => "offline", _ => "unknown" };
                 let range = request.headers().get("Range").and_then(|v| v.to_str().ok())
                     .filter(|v| v.len() <= 100 && v.bytes().all(|b| b.is_ascii_digit() || b"bytes=,- ".contains(&b)));
                 let origin_kind = match request_origin.as_deref() { None => "missing", Some("null") => "null", Some(origin) if allowed_frontend_origin(origin) => "app", _ => "other" };
@@ -106,6 +107,8 @@ pub fn run() {
                 );
                 return;
             }
+            let app_for_offline = _app.clone();
+            let range_header = request.headers().get("Range").and_then(|v| v.to_str().ok()).map(str::to_owned);
             let uri = request.uri().clone();
             let path = uri.path().to_string();
             let query = uri.query().unwrap_or("").to_string();
@@ -113,7 +116,11 @@ pub fn run() {
             // （Windows/Android 是 http://<scheme>.localhost，macOS/iOS/Linux 是 <scheme>://localhost）。
             // 它同时是 m3u8 分片/key 改写用的前缀，必须与前端 src/api.ts 的 LOCAL 一致。
             tauri::async_runtime::spawn(async move {
-                let mut resp = media::handle(&path, &query, media::LOCAL_ORIGIN).await;
+                let mut resp = if path == "/offline" {
+                    source_hub::serve_offline(&app_for_offline, &query, range_header.as_deref()).await
+                } else {
+                    media::handle(&path, &query, media::LOCAL_ORIGIN).await
+                };
                 if let Some(origin) =
                     request_origin.and_then(|s| tauri::http::HeaderValue::from_str(&s).ok())
                 {
@@ -167,6 +174,10 @@ pub fn run() {
             api::api_like,
             api::api_collect,
             api::api_follow,
+            source_hub::hub_fetch_html,
+            source_hub::hub_download_media,
+            source_hub::hub_list_downloads,
+            source_hub::hub_remove_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
