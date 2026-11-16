@@ -193,3 +193,24 @@ export const listHubDownloads = () => invoke<HubDownload[]>("hub_list_downloads"
 export const downloadHubMedia = (url: string, title: string) =>
   invoke<HubDownload>("hub_download_media", { url, title });
 export const deleteHubDownload = (id: string) => invoke<void>("hub_remove_download", { id });
+
+
+/** Detect standard HTML GET search forms on an added website, without executing remote scripts. */
+export async function discoverSearchTemplate(source: HubSource): Promise<string | null> {
+  validateSource(source);
+  const html = await fetchHubHtml(source.homepage);
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const forms = Array.from(doc.querySelectorAll("form"));
+  for (const form of forms) {
+    if ((form.getAttribute("method") || "GET").toUpperCase() !== "GET") continue;
+    const input = Array.from(form.querySelectorAll<HTMLInputElement>("input[name]"))
+      .find((el) => el.type === "search" || /^(s|q|query|keyword|search|wd|text)$/i.test(el.name));
+    if (!input) continue;
+    const action = new URL(form.getAttribute("action") || source.homepage, source.homepage);
+    if (action.protocol !== "https:" || action.origin !== new URL(source.homepage).origin) continue;
+    action.searchParams.set(input.name, "{query}");
+    // URL serialization will encode braces; preserve a literal placeholder in our setting.
+    return action.href.replace("%7Bquery%7D", "{query}");
+  }
+  return null;
+}
