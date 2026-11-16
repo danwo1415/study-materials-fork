@@ -107,7 +107,7 @@ pub fn run() {
                 );
                 return;
             }
-            let app_for_offline = _app.clone();
+            let app_for_offline = _app.app_handle().clone();
             let range_header = request.headers().get("Range").and_then(|v| v.to_str().ok()).map(str::to_owned);
             let uri = request.uri().clone();
             let path = uri.path().to_string();
