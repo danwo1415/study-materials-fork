@@ -6,6 +6,10 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/android-apk.yml"
+      - "src/**"
+      - "src-tauri/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
 
 permissions:
   contents: read
