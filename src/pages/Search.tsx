@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import SourceHub from "./SourceHub";
 import { api, fmt } from "../api";
 import type { RankItem, VideoCard } from "../types";
 import { useStore } from "../store";
@@ -10,6 +11,7 @@ const HOT_TAGS = ["都市", "逆袭", "古风", "系统", "后宫", "校园", "�
 
 export default function Search({ active, wide }: { active: boolean; wide: boolean }) {
   const { push, searchHist, addSearch, clearSearchHist, toast } = useStore();
+  const [hubOpen, setHubOpen] = useState(true);
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [items, setItems] = useState<VideoCard[]>([]);
@@ -70,6 +72,7 @@ export default function Search({ active, wide }: { active: boolean; wide: boolea
             className="flex-1 min-w-0 bg-transparent text-[13.5px] text-on placeholder-dim outline-none" />
           {q && <button type="button" onClick={() => { setQ(""); setSubmitted(""); setItems([]); }} className="w-5 h-5 rounded-full bg-s4 flex items-center justify-center text-mut pressable"><IClose size={11} /></button>}
         </form>
+        <button onClick={() => setHubOpen((v) => !v)} className="px-3 h-11 rounded-(--r-ctl) bg-s3 text-on text-[12px] font-semibold shrink-0">{hubOpen ? "原搜索" : "多站搜索"}</button>
         <button onClick={() => push({ kind: "ranks" })} aria-label="排行榜"
           className="w-11 h-11 rounded-(--r-sm) flex items-center justify-center bg-primary text-on-primary pressable elev-2">
           <ITrophy size={19} />
@@ -77,7 +80,7 @@ export default function Search({ active, wide }: { active: boolean; wide: boolea
       </div>
 
       <div className="flex-1 scroll-y px-4 pb-24">
-        {!querying ? (
+        {hubOpen ? <SourceHub /> : !querying ? (
           <>
             {searchHist.length > 0 && (
               <div className="mt-1 a-rise">
