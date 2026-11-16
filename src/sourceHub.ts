@@ -144,11 +144,13 @@ export function parsePublicSearch(html: string, pageUrl: string, source: HubSour
     const uri = absoluteUrl(pageUrl, node.getAttribute("href") || "");
     if (!uri) continue;
     const parsed = new URL(uri);
-    if (!parsed.hostname.endsWith(homepageHost)) continue;
+    if (parsed.hostname !== homepageHost && !parsed.hostname.endsWith("." + homepageHost)) continue;
     if (/\/(login|signup|register|user|account|category|tag|search)(\/|[?#]|$)/i.test(parsed.pathname)) continue;
     if (parsed.pathname === "/" && !parsed.search) continue;
     // Require a keyword match to avoid returning all navigation links when a site ignores a search template.
-    const haystack = (title + " " + decodeURIComponent(parsed.pathname)).toLocaleLowerCase();
+    let decodedPath = parsed.pathname;
+    try { decodedPath = decodeURIComponent(parsed.pathname); } catch { /* ignore invalid escapes */ }
+    const haystack = (title + " " + decodedPath).toLocaleLowerCase();
     if (!words.some((w) => haystack.includes(w))) continue;
     if (seen.has(uri)) continue;
     seen.add(uri);
