@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api, LOCAL } from "../api";
 import {
   type HubDownload, type HubMedia, type HubResult, type HubSource,
-  makeHubSource, readHubSources, saveHubSources, searchPublicSite,
+  makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
   fetchHubHtml, findDirectMedia, validateSource, listHubDownloads,
   downloadHubMedia, deleteHubDownload,
 } from "../sourceHub";
@@ -68,7 +68,7 @@ export default function SourceHub() {
   const updateSource = (id: string, patch: Partial<HubSource>) =>
     setSources((prev) => prev.map((s) => s.id === id ? { ...s, ...patch } : s));
 
-  const addSite = () => {
+  const addSite = async () => {
     try {
       const site = makeHubSource(newUrl);
       if (sources.some((s) => new URL(s.homepage).hostname === new URL(site.homepage).hostname)) {
@@ -78,7 +78,14 @@ export default function SourceHub() {
       setSources((prev) => [...prev, site]);
       setNewUrl("");
       setAdding(false);
-      setMessage("已保存 " + site.name + "；请检查其搜索规则再测试");
+      setMessage("已保存 " + site.name + "，正在尝试识别公开搜索表单…");
+      try {
+        const found = await discoverSearchTemplate(site);
+        if (found) {
+          updateSource(site.id, { searchTemplate: found, configured: true });
+          setMessage("已识别 " + site.name + " 的 GET 搜索表单，请实际测试搜索结果");
+        } else setMessage("已保存网站，但未识别到标准公开搜索表单；需要手动配置搜索规则或开发专用适配器");
+      } catch (e) { setMessage("网站已保存；自动检测失败：" + (e as Error).message); }
     } catch (e) { setMessage((e as Error).message); }
   };
 
@@ -206,7 +213,7 @@ export default function SourceHub() {
       {adding && <div className="rounded-(--r-md) p-3 bg-s2 space-y-2">
         <label className="text-[12px]">视频网站主页或作品网址</label>
         <input className={field} placeholder="https://example.com/" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} />
-        <button className={btn} onClick={addSite}>保存网站</button>
+        <button className={btn} onClick={() => { void addSite(); }}>保存并自动识别</button>
         <p className="text-[11px] text-mut">保存网址不会自动解析任意网站。保存后可设置网站的公开搜索地址模板。</p>
       </div>}
       {sources.map((s) => <div key={s.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
@@ -221,6 +228,13 @@ export default function SourceHub() {
         <input className={field} value={s.searchTemplate} onChange={(e) =>
           updateSource(s.id, { searchTemplate: e.target.value, configured: false })} />
         <div className="flex gap-2 items-center justify-between">
+          <button className={btn} onClick={async () => {
+            try {
+              const found = await discoverSearchTemplate(s);
+              if (found) { updateSource(s.id, { searchTemplate: found, configured: true }); setMessage("已识别公开搜索表单，可尝试搜索"); }
+              else setMessage("无法自动识别搜索表单，请手动配置或制作专用适配器");
+            } catch (e) { setMessage((e as Error).message); }
+          }}>自动识别</button>
           <button className={btn} onClick={() => {
             try { validateSource(s); updateSource(s.id, { configured: true }); setMessage(s.name + " 规则格式有效；实际搜索仍需测试"); }
             catch (e) { setMessage((e as Error).message); }
