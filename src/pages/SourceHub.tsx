@@ -5,13 +5,21 @@ import { api, LOCAL } from "../api";
 import {
   type HubDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
   makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
-  fetchHubHtml, findDirectMedia, findPublicEpisodes, fetchNnyyEpisode, validateSource, listHubDownloads,
+  fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, validateSource, listHubDownloads,
   downloadHubMedia, deleteHubDownload,
 } from "../sourceHub";
 
 type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: string };
 
 function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offline" } }) {
+  if (media.type === "embed") {
+    return <div className="space-y-2">
+      <iframe src={media.url} title="视频站公开嵌入播放器" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+        referrerPolicy="strict-origin-when-cross-origin" allow="autoplay; fullscreen; picture-in-picture"
+        allowFullScreen className="w-full aspect-video bg-black rounded-(--r-md)" />
+      <div className="text-[11px] text-mut">此播放线路由第三方嵌入页面提供。若网站禁止嵌入，请使用下方「在原网站打开当前剧集」。</div>
+    </div>;
+  }
   const videoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = videoRef.current;
@@ -151,7 +159,7 @@ export default function SourceHub() {
         setMedia(streams);
       } else {
         const html = await fetchHubHtml(ep.url);
-        setMedia(findDirectMedia(html, ep.url));
+        setMedia([...findDirectMedia(html, ep.url), ...findAllowedSiteEmbeds(html, ep.url)]);
       }
     } catch (e) { setMessage((e as Error).message); }
     finally { setDetailLoading(false); }
@@ -229,7 +237,7 @@ export default function SourceHub() {
           <div key={m.url} className="space-y-2 border-t border-white/10 pt-2">
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
             <EmbeddedVideo media={m} />
-            {m.type !== "hls" && <button className={btn} disabled={downloading}
+            {(m.type === "mp4" || m.type === "webm") && <button className={btn} disabled={downloading}
               onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频"}</button>}
             {m.type === "hls" && <div className="text-[11px] text-mut">此版本支持尝试播放 HLS，暂不提供 HLS 下载。</div>}
           </div>) : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
