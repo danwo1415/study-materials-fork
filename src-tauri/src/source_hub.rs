@@ -348,6 +348,14 @@ fn hls_media_segments(source: &str, contents: &str, id: &str) -> Result<HlsSnaps
     for raw in contents.lines().skip(1) {
         let line = raw.trim();
         if line.is_empty() { continue; }
+        // METHOD=NONE explicitly means subsequent segments are not encrypted.
+        // Discard this directive in the offline copy; any other KEY stays blocked.
+        if line.starts_with("#EXT-X-KEY:")
+            && line.contains("METHOD=NONE")
+            && !line.contains("URI=")
+        {
+            continue;
+        }
         if line.starts_with("#EXT-X-KEY")
             || line.starts_with("#EXT-X-SESSION-KEY")
             || line.starts_with("#EXT-X-MAP")
@@ -552,6 +560,8 @@ mod hls_snapshot_tests {
     fn rejects_encryption_and_live_streams() {
         let encrypted = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXTINF:4,\na.ts\n#EXT-X-ENDLIST\n";
         assert!(hls_media_segments("https://example.org/list.m3u8", encrypted, "h1").is_err());
+        let clear = "#EXTM3U\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:4,\na.ts\n#EXT-X-ENDLIST\n";
+        assert!(hls_media_segments("https://example.org/list.m3u8", clear, "h1").is_ok());
         let live = "#EXTM3U\n#EXTINF:4,\na.ts\n";
         assert!(hls_media_segments("https://example.org/list.m3u8", live, "h1").is_err());
     }
