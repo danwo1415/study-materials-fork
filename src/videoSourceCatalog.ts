@@ -55,12 +55,4 @@ export const videoSourceCandidates: readonly VideoSourceCandidate[] = [
     category: "documentary",
     integrationStatus: "pending",
   },
-  {
-    id: "ikanbot",
-    name: "iKanBot (爱看机器人)",
-    homepage: "https://www1.ikanbot.com/",
-    exampleUrl: "https://www1.ikanbot.com/play/381898",
-    category: "film-tv",
-    integrationStatus: "pending",
-  },
 ];
