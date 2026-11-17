@@ -5,7 +5,7 @@ import { api, LOCAL } from "../api";
 import {
   type HubDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
   makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
-  fetchHubHtml, findDirectMedia, findPublicEpisodes, validateSource, listHubDownloads,
+  fetchHubHtml, findDirectMedia, findPublicEpisodes, fetchNnyyEpisode, validateSource, listHubDownloads,
   downloadHubMedia, deleteHubDownload,
 } from "../sourceHub";
 
@@ -145,8 +145,14 @@ export default function SourceHub() {
     setDetailLoading(true);
     setMessage("");
     try {
-      const html = await fetchHubHtml(ep.url);
-      setMedia(findDirectMedia(html, ep.url));
+      if (selected?.sourceId === "nnyy" && new URL(ep.url).pathname.startsWith("/_gp/")) {
+        const streams = await fetchNnyyEpisode(ep.url);
+        if (!streams.length) setMessage("该剧集没有公开可识别的播放地址");
+        setMedia(streams);
+      } else {
+        const html = await fetchHubHtml(ep.url);
+        setMedia(findDirectMedia(html, ep.url));
+      }
     } catch (e) { setMessage((e as Error).message); }
     finally { setDetailLoading(false); }
   };
@@ -211,13 +217,14 @@ export default function SourceHub() {
       </div>}
       {selected && <div className="rounded-(--r-md) bg-s2 p-3 space-y-2">
         <div className="font-semibold text-[14px]">{selected.title}</div>
-        <div className="text-[11px] text-mut">{selected.sourceName}</div>
+        <div className="text-[11px] text-mut">{selected.sourceName}{selected.sourceId === "nnyy" ? " · 已支持公开选集接口" : ""}</div>
         {episodes.length > 0 && <div className="space-y-2">
           <div className="text-[12px] font-semibold">公开剧集 / 播放入口（{episodes.length}）</div>
           <div className="flex flex-wrap gap-2 max-h-44 overflow-auto">{episodes.map((ep) =>
             <button key={ep.url} className={btn + (activeEpisode?.url === ep.url ? " bg-primary text-on-primary" : "")}
               onClick={() => { void openEpisode(ep); }}>{ep.title}</button>)}</div>
         </div>}
+        {episodes.length > 0 && !activeEpisode && <div className="text-[11px] text-mut">请先选择上面的剧集，才能加载对应的视频线路。</div>}
         {detailLoading ? <div className="text-xs">正在分析公开播放地址…</div> : media.length ? media.map((m, i) =>
           <div key={m.url} className="space-y-2 border-t border-white/10 pt-2">
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
