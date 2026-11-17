@@ -39,9 +39,13 @@ const defaultSites: HubSource[] = videoSourceCandidates.map((s) => ({
   name: s.name,
   homepage: s.homepage,
   // These templates are hypotheses for user testing, not validated site endpoints.
-  searchTemplate: new URL("?s={query}", s.homepage).href.replace("%7Bquery%7D", "{query}"),
+  searchTemplate: s.id === "ikanbot"
+    ? "https://www1.ikanbot.com/search?q={query}"
+    : s.id === "bandai-channel"
+      ? "https://www.b-ch.com/search/?search_txt={query}"
+      : new URL("?s={query}", s.homepage).href.replace("%7Bquery%7D", "{query}"),
   enabled: true,
-  configured: false,
+  configured: s.id === "ikanbot" || s.id === "bandai-channel",
 }));
 
 export function readHubSources(): HubSource[] {
@@ -52,7 +56,19 @@ export function readHubSources(): HubSource[] {
         typeof s.name === "string" && typeof s.homepage === "string" &&
         typeof s.searchTemplate === "string" && typeof s.enabled === "boolean");
       const ids = new Set(arr.map((x) => x.id));
-      return [...arr, ...defaultSites.filter((x) => !ids.has(x.id))];
+      return [
+        ...arr.map((x) => {
+          const builtin = defaultSites.find((d) => d.id === x.id);
+          // Migrate old untested generic guesses to verified search paths.
+          if (builtin?.configured && !x.configured &&
+              (x.searchTemplate.endsWith("/?s={query}") ||
+               x.searchTemplate.endsWith("?s={query}"))) {
+            return { ...x, searchTemplate: builtin.searchTemplate, configured: true };
+          }
+          return x;
+        }),
+        ...defaultSites.filter((x) => !ids.has(x.id)),
+      ];
     }
   } catch { /* corrupted local settings: use defaults */ }
   return defaultSites;
@@ -167,10 +183,28 @@ export function parsePublicSearch(html: string, pageUrl: string, source: HubSour
   return results;
 }
 
-export async function searchPublicSite(source: HubSource, query: string): Promise<HubResult[]> {
-  const pageUrl = searchUrl(source, query);
+export async function searchPublicSite(source: HubSource, query: string): Promise<{
+  items: HubResult[];
+  template: string;
+  discovered: boolean;
+}> {
+  let resolved = source;
+  let discovered = false;
+  if (!source.configured) {
+    const found = await discoverSearchTemplate(source);
+    if (!found) {
+      throw new Error("未识别到可用的公开 GET 搜索表单；该网站需要专用适配器");
+    }
+    resolved = { ...source, searchTemplate: found, configured: true };
+    discovered = true;
+  }
+  const pageUrl = searchUrl(resolved, query);
   const html = await fetchHubHtml(pageUrl);
-  return parsePublicSearch(html, pageUrl, source, query);
+  return {
+    items: parsePublicSearch(html, pageUrl, resolved, query),
+    template: resolved.searchTemplate,
+    discovered,
+  };
 }
 
 export function findDirectMedia(html: string, pageUrl: string): HubMedia[] {
