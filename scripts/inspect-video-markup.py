@@ -58,7 +58,7 @@ def inspect(name,url):
    if len(snippets)>=10:break
   return snippets
  scripts=[{"src":_safe_url(x["src"]) if x["src"] else None,"chars":len(x["data"]),"snippet":safe_script(x["data"])} for x in parsed.scripts if x["src"] or KW.search(x["data"])]
- return name,{"status":200,"final_url":final_url,"html_len":len(content),"tag_count":len(parsed.tags),"tags":interesting[:55],"script_count":len(parsed.scripts),"scripts":scripts[:28],
+ return name,{"inline_play_logic": [re.sub(r"https?://[^\\s\\\"\\\x27<>]+","[remote-url]", x["data"][:2400]) for x in parsed.scripts if x["data"] and ("s_video_plays" in x["data"] or "play_changed(" in x["data"])][:2], "status":200,"final_url":final_url,"html_len":len(content),"tag_count":len(parsed.tags),"tags":interesting[:55],"script_count":len(parsed.scripts),"scripts":scripts[:28],
     "html_player_hits":len(KW.findall(content))}
 def _safe_url(x):
  if not x:return ""
