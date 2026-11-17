@@ -1,0 +1,31 @@
+name: Verify six video websites
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/test-video-sites.py"
+      - ".github/workflows/verify-video-sites.yml"
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check six websites (public HTML only)
+        run: python scripts/test-video-sites.py
+      - name: Upload public verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: six-site-public-verification
+          path: reports/site-smoke.*
+          retention-days: 30
+          if-no-files-found: warn
