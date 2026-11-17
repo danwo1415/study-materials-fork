@@ -6,23 +6,23 @@ import {
   type HubDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
   makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
   fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, validateSource, listHubDownloads,
-  downloadHubMedia, deleteHubDownload,
+  downloadHubMedia, downloadHubHls, deleteHubDownload,
 } from "../sourceHub";
 
 type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: string };
 
-function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offline" } }) {
+function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offline" | "offline-hls" } }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = videoRef.current;
     if (!video || media.type === "embed") return;
     let hls: Hls | undefined;
-    if (media.type === "hls" && Hls.isSupported()) {
+    if ((media.type === "hls" || media.type === "offline-hls") && Hls.isSupported()) {
       hls = new Hls({ enableWorker: false });
-      hls.loadSource(LOCAL + "/hls?u=" + encodeURIComponent(media.url));
+      hls.loadSource(media.type === "offline-hls" ? media.url : LOCAL + "/hls?u=" + encodeURIComponent(media.url));
       hls.attachMedia(video);
-    } else if (media.type === "hls") {
-      video.src = LOCAL + "/hls?u=" + encodeURIComponent(media.url);
+    } else if (media.type === "hls" || media.type === "offline-hls") {
+      video.src = media.type === "offline-hls" ? media.url : LOCAL + "/hls?u=" + encodeURIComponent(media.url);
     } else if (media.type === "offline") {
       video.src = media.url;
     } else {
@@ -73,10 +73,10 @@ export default function SourceHub() {
   useEffect(() => {
     void listHubDownloads().then(setDownloads).catch(() => {});
     let unlisten: (() => void) | undefined;
-    void listen<{ received: number; total: number | null }>("hub-download-progress", (event) => {
-      const { received, total } = event.payload;
+    void listen<{ received: number; total: number | null; completedParts?: number; totalParts?: number }>("hub-download-progress", (event) => {
+      const { received, total, completedParts, totalParts } = event.payload;
       setDownloadProgress(total ? Math.round(received / total * 100) + "%"
-        : (received / 1048576).toFixed(1) + " MB");
+        : (completedParts && totalParts ? completedParts + "/" + totalParts + " 片 · " : "") + (received / 1048576).toFixed(1) + " MB");
     }).then((fn) => { unlisten = fn; });
     return () => unlisten?.();
   }, []);
@@ -173,12 +173,15 @@ export default function SourceHub() {
   };
 
   const download = async (item: HubMedia) => {
-    if (!selected || item.type === "hls") return;
+    if (!selected || item.type === "embed") return;
     setDownloading(true);
     setDownloadProgress("开始下载");
     setMessage("");
     try {
-      const saved = await downloadHubMedia(item.url, selected.title);
+      const fullTitle = activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title;
+      const saved = item.type === "hls"
+        ? await downloadHubHls(item.url, fullTitle)
+        : await downloadHubMedia(item.url, fullTitle);
       setDownloads((prev) => [...prev, saved]);
       setMessage("已下载到 App 私有目录，可在「离线」查看");
     } catch (e) { setMessage((e as Error).message); }
@@ -262,9 +265,9 @@ export default function SourceHub() {
           <div key={m.url} className="space-y-2 border-t border-white/10 pt-2">
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
             <EmbeddedVideo media={m} />
-            {(m.type === "mp4" || m.type === "webm") && <button className={btn} disabled={downloading}
+            {(m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
               onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频"}</button>}
-            {m.type === "hls" && <div className="text-[11px] text-mut">此版本支持尝试播放 HLS，暂不提供 HLS 下载。</div>}
+            {m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
           </div>) : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
         {activeEpisode && <button className={btn} onClick={() => { void api.openUrl(activeEpisode.url); }}>在原网站打开当前剧集</button>}
         <button className={btn} onClick={() => { void api.openUrl(selected.url); }}>在原网站打开详情</button>
@@ -316,7 +319,9 @@ export default function SourceHub() {
       {downloads.length ? downloads.map((d) => <div key={d.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
         <div className="text-[13px] font-semibold">{d.title}</div>
         <div className="text-[11px] text-mut">{(d.bytes / 1048576).toFixed(1)} MB</div>
-        <EmbeddedVideo media={{ url: LOCAL + "/offline?id=" + encodeURIComponent(d.id), type: "offline" }} />
+        <EmbeddedVideo media={d.contentType === "application/vnd.apple.mpegurl"
+          ? { url: LOCAL + "/offline-hls?id=" + encodeURIComponent(d.id) + "&file=index.m3u8", type: "offline-hls" }
+          : { url: LOCAL + "/offline?id=" + encodeURIComponent(d.id), type: "offline" }} />
         <button className={btn} onClick={() => { void removeDownload(d.id); }}>删除本地文件</button>
       </div>) : <div className="text-[12px] text-mut">还没有离线视频。先在聚合搜索里找到可直接下载的 MP4/WebM。</div>}
     </div>}
