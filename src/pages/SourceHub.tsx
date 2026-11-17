@@ -3,9 +3,9 @@ import Hls from "hls.js";
 import { listen } from "@tauri-apps/api/event";
 import { api, LOCAL } from "../api";
 import {
-  type HubDownload, type HubMedia, type HubResult, type HubSource,
+  type HubDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
   makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
-  fetchHubHtml, findDirectMedia, validateSource, listHubDownloads,
+  fetchHubHtml, findDirectMedia, findPublicEpisodes, validateSource, listHubDownloads,
   downloadHubMedia, deleteHubDownload,
 } from "../sourceHub";
 
@@ -45,6 +45,8 @@ export default function SourceHub() {
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<HubResult | null>(null);
   const [media, setMedia] = useState<HubMedia[]>([]);
+  const [episodes, setEpisodes] = useState<HubEpisode[]>([]);
+  const [activeEpisode, setActiveEpisode] = useState<HubEpisode | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [downloads, setDownloads] = useState<HubDownload[]>([]);
@@ -102,8 +104,10 @@ export default function SourceHub() {
     setStatuses(Object.fromEntries(selectedSources.map((s) => [s.id, { state: "searching" }])));
     await Promise.all(selectedSources.map(async (source) => {
       try {
-        const items = await searchPublicSite(source, k);
+        const search = await searchPublicSite(source, k);
+        const items = search.items;
         if (searchCounter.current !== seq) return;
+        if (search.discovered) updateSource(source.id, { searchTemplate: search.template, configured: true });
         setResults((prev) => {
           const ids = new Set(prev.map((r) => r.id));
           return [...prev, ...items.filter((r) => !ids.has(r.id))];
@@ -123,11 +127,26 @@ export default function SourceHub() {
   const openResult = async (result: HubResult) => {
     setSelected(result);
     setMedia([]);
+    setEpisodes([]);
+    setActiveEpisode(null);
     setDetailLoading(true);
     setMessage("");
     try {
       const html = await fetchHubHtml(result.url);
       setMedia(findDirectMedia(html, result.url));
+      setEpisodes(findPublicEpisodes(html, result.url, result.sourceId));
+    } catch (e) { setMessage((e as Error).message); }
+    finally { setDetailLoading(false); }
+  };
+
+  const openEpisode = async (ep: HubEpisode) => {
+    setActiveEpisode(ep);
+    setMedia([]);
+    setDetailLoading(true);
+    setMessage("");
+    try {
+      const html = await fetchHubHtml(ep.url);
+      setMedia(findDirectMedia(html, ep.url));
     } catch (e) { setMessage((e as Error).message); }
     finally { setDetailLoading(false); }
   };
@@ -193,6 +212,12 @@ export default function SourceHub() {
       {selected && <div className="rounded-(--r-md) bg-s2 p-3 space-y-2">
         <div className="font-semibold text-[14px]">{selected.title}</div>
         <div className="text-[11px] text-mut">{selected.sourceName}</div>
+        {episodes.length > 0 && <div className="space-y-2">
+          <div className="text-[12px] font-semibold">公开剧集 / 播放入口（{episodes.length}）</div>
+          <div className="flex flex-wrap gap-2 max-h-44 overflow-auto">{episodes.map((ep) =>
+            <button key={ep.url} className={btn + (activeEpisode?.url === ep.url ? " bg-primary text-on-primary" : "")}
+              onClick={() => { void openEpisode(ep); }}>{ep.title}</button>)}</div>
+        </div>}
         {detailLoading ? <div className="text-xs">正在分析公开播放地址…</div> : media.length ? media.map((m, i) =>
           <div key={m.url} className="space-y-2 border-t border-white/10 pt-2">
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
@@ -201,6 +226,7 @@ export default function SourceHub() {
               onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频"}</button>}
             {m.type === "hls" && <div className="text-[11px] text-mut">此版本支持尝试播放 HLS，暂不提供 HLS 下载。</div>}
           </div>) : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
+        {activeEpisode && <button className={btn} onClick={() => { void api.openUrl(activeEpisode.url); }}>在原网站打开当前剧集</button>}
         <button className={btn} onClick={() => { void api.openUrl(selected.url); }}>在原网站打开详情</button>
       </div>}
       {!searching && !results.length && query.trim() && Object.keys(statuses).length > 0 &&
