@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Inspect bounded, public HTML player structures without downloading streams or executing scripts."""
+import concurrent.futures
+from html.parser import HTMLParser
+import json
+import re
+import urllib.request
+from urllib.parse import urlparse
+
+PAGES = {
+ "nnyy": "https://nnyy.in/dongman/20096378.html",
+ "dm84": "https://dm84.tv/v/1773.html",
+ "ikanbot": "https://www1.ikanbot.com/play/381898",
+ "bandai": "https://www.b-ch.com/titles/2277/001",
+ "zhaojixie": "https://zhaojixie.com/category/jilupian.html",
+}
+KW = re.compile(r"player_|playlist|playfrom|playurl|m3u8|\\.mp4|vod_play|episode|第0?1集|第0?26集|iframe|data-src|data-url|data-href|source|video",re.I)
+class Scan(HTMLParser):
+ def __init__(self):
+  super().__init__(convert_charrefs=True)
+  self.tags=[]; self.scripts=[]; self.curr=None; self.ln=0; self.stack=[]
+ def handle_starttag(self,tag,attrs):
+  d=dict(attrs)
+  if tag in ("a","iframe","video","source","li","input","button") or ("play" in (" ".join(d.get("class",""))).lower()):
+   self.tags.append((tag,d))
+  if tag=="script":
+   self.curr={"src":d.get("src"),"data":""}
+ def handle_endtag(self,tag):
+  if tag=="script" and self.curr:
+   self.scripts.append(self.curr);self.curr=None
+ def handle_data(self,data):
+  if self.curr is not None:self.curr["data"]+=data
+
+def inspect(name,url):
+ req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"})
+ try:
+  with urllib.request.urlopen(req,timeout=20) as f: content=f.read(1000000).decode("utf-8","replace");final_url=f.url
+ except Exception as e:return name,{"error":str(e)[:170]}
+ parsed=Scan()
+ try:parsed.feed(content)
+ except Exception as e:return name,{"parse_error":str(e)}
+ # show patterns, lengths and script src, without raw media tokens
+ interesting=[]
+ for tag,attrs in parsed.tags:
+  keys={k:v for k,v in attrs.items() if k in ("class","id","href","data-url","data-href","src","data-src","onclick","data-episode","data-play","title","type","name")}
+  if tag=="a" and not KW.search(" ".join(str(v) for v in keys.values())):continue
+  if tag=="a" and len(interesting)>=40:continue
+  interesting.append({"tag":tag,"attrs":{k:(v[:150] if k not in ("href","src","data-url","data-src") else _safe_url(v)) for k,v in keys.items()}})
+ def safe_script(s):
+  snippets=[]
+  for match in KW.finditer(s):
+   st=max(0,match.start()-80);en=min(len(s),match.end()+100)
+   chunk=s[st:en]
+   # hide literal arbitrary links and long tokens
+   chunk=re.sub(r'https?:(?://|\\/\\/)[^\s"\'<>]{30,}',lambda m:_safe_url(m.group())+" [url]",chunk)
+   chunk=re.sub(r'[A-Za-z0-9_-]{65,}',"<long-string>",chunk)
+   snippets.append(" ".join(chunk.split())[:230])
+   if len(snippets)>=10:break
+  return snippets
+ scripts=[{"src":_safe_url(x["src"]) if x["src"] else None,"chars":len(x["data"]),"snippet":safe_script(x["data"])} for x in parsed.scripts if x["src"] or KW.search(x["data"])]
+ return name,{"status":200,"final_url":final_url,"html_len":len(content),"tag_count":len(parsed.tags),"tags":interesting[:55],"script_count":len(parsed.scripts),"scripts":scripts[:28],
+    "html_player_hits":len(KW.findall(content))}
+def _safe_url(x):
+ if not x:return ""
+ try:
+  u=urlparse(x)
+  if u.scheme in ("https","http"):
+   return f"{u.scheme}://{u.hostname}{u.path[:95]}"+("?[query]" if u.query else "")
+ except Exception:pass
+ return x[:140]
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+ for name,record in sorted(pool.map(lambda x:inspect(*x),PAGES.items())):
+  print("\n=== "+name+" ===")
+  print(json.dumps(record,ensure_ascii=False,indent=2)[:12500])
