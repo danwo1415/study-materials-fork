@@ -111,7 +111,36 @@ def check_nnyy_public_episode():
      ]},ensure_ascii=False))
  except Exception as e:print("=== nnyy public episode API ===\n"+str(e)[:250])
 
+
+def inspect_dm84_episode_links():
+ req=urllib.request.Request("https://dm84.tv/v/1773.html",headers={
+   "User-Agent":"Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36",
+ })
+ try:
+  with urllib.request.urlopen(req,timeout=15) as resp:
+   body=resp.read(1000000).decode("utf-8","replace")
+  class Links(HTMLParser):
+   def __init__(self): super().__init__();self.a=[];self.current=None
+   def handle_starttag(self,tag,attrs):
+    if tag=="a":self.current={"attrs":dict(attrs),"text":""}
+   def handle_data(self,text):
+    if self.current is not None:self.current["text"]+=text
+   def handle_endtag(self,tag):
+    if tag=="a" and self.current is not None:
+     self.a.append(self.current);self.current=None
+  parser=Links();parser.feed(body)
+  opts=[]
+  for link in parser.a:
+   href=link["attrs"].get("href","")
+   if href and re.search(r"(?:/p/|/play/|episode|1773)",href,re.I):
+    opts.append({"href":href[:170],"text":link["text"].strip()[:45],"class":link["attrs"].get("class","")[:80]})
+  print("=== dm84 episode links ===")
+  print(json.dumps(opts[:35],ensure_ascii=False))
+  # No automatic stream fetch here; need separately confirm a legitimate public play page.
+ except Exception as e:print("=== dm84 episode links ===",str(e)[:130])
+
 check_nnyy_public_episode()
+inspect_dm84_episode_links()
 with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
  for name,record in sorted(pool.map(lambda x:inspect(*x),PAGES.items())):
   print("\n=== "+name+" ===")
