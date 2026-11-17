@@ -1,0 +1,21 @@
+name: Diagnose iKanBot playback
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/inspect-ikanbot-public.py"
+      - ".github/workflows/inspect-ikanbot.yml"
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Examine public iKanBot player scripts and framing headers
+        run: python scripts/inspect-ikanbot-public.py
