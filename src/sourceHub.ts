@@ -22,7 +22,7 @@ export type HubResult = {
 
 export type HubMedia = {
   url: string;
-  type: "mp4" | "webm" | "hls";
+  type: "mp4" | "webm" | "hls" | "embed";
 };
 
 export type HubDownload = {
@@ -262,6 +262,31 @@ export function findDirectMedia(html: string, pageUrl: string): HubMedia[] {
     url,
     type: /\.m3u8(?:[?#]|$)/i.test(url) ? "hls" : /\.webm(?:[?#]|$)/i.test(url) ? "webm" : "mp4",
   }));
+}
+
+/**
+ * DM84 exposes an ordinary third-party iframe player on its episode pages.
+ * Embed only the observed, explicitly allowlisted player host. This does not
+ * extract its streams or circumvent its access controls; the provider may
+ * decline to be framed on Android.
+ */
+export function findAllowedSiteEmbeds(html: string, pageUrl: string): HubMedia[] {
+  const source = new URL(pageUrl);
+  if (source.protocol !== "https:" || source.hostname !== "dm84.tv" ||
+      !/^\/p\/\d+-\d+-\d+\.html$/.test(source.pathname)) {
+    return [];
+  }
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const found: HubMedia[] = [];
+  for (const iframe of doc.querySelectorAll("iframe[src]")) {
+    const target = absoluteUrl(pageUrl, iframe.getAttribute("src") || "");
+    if (!target) continue;
+    const uri = new URL(target);
+    if (uri.protocol === "https:" && uri.hostname === "hhjx.hhplayer.com") {
+      found.push({ type: "embed", url: uri.href });
+    }
+  }
+  return found.slice(0, 3);
 }
 
 export const listHubDownloads = () => invoke<HubDownload[]>("hub_list_downloads");
