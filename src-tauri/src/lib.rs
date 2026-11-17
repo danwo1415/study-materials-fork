@@ -175,6 +175,7 @@ pub fn run() {
             api::api_collect,
             api::api_follow,
             source_hub::hub_fetch_html,
+            source_hub::hub_fetch_public_json,
             source_hub::hub_download_media,
             source_hub::hub_list_downloads,
             source_hub::hub_remove_download,
