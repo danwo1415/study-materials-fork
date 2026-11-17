@@ -250,3 +250,44 @@ export async function discoverSearchTemplate(source: HubSource): Promise<string 
   }
   return null;
 }
+
+
+/**
+ * Extract public episode/detail links from a fetched work page.
+ * This does not call private playback APIs or decode protected streams.
+ */
+export type HubEpisode = {
+  title: string;
+  url: string;
+};
+export function findPublicEpisodes(html: string, pageUrl: string, sourceId: string): HubEpisode[] {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  for (const n of doc.querySelectorAll("script,style,noscript,nav,footer,header")) n.remove();
+  const origin = new URL(pageUrl).origin;
+  const selectors: Record<string, string> = {
+    nnyy: 'a[href*="/play/"],a[href*="/vodplay/"],a[href*="/dongman/"]',
+    dm84: 'a[href*="/play/"],a[href*="/v/"],a[href*="/p/"]',
+    ikanbot: 'a[href*="/play/"],a[href*="/video/"]',
+    "bandai-channel": 'a[href*="/titles/"]',
+    iyf: 'a[href*="/play/"],a[href*="/detail/"]',
+    zhaojixie: 'a[href*="/play/"],a[href*="/video/"],a[href*="/jilupian/"]',
+  };
+  const candidates = doc.querySelectorAll((selectors[sourceId] || 'a[href*="/play/"]') + ',[class*="episode"] a[href],[class*="playlist"] a[href],[class*="play-list"] a[href]');
+  const out: HubEpisode[] = [];
+  const seen = new Set<string>([pageUrl.replace(/[#?].*$/, "")]);
+  for (const a of candidates) {
+    const raw = a.getAttribute("href") || "";
+    const url = absoluteUrl(pageUrl, raw);
+    if (!url) continue;
+    const parsed = new URL(url);
+    if (parsed.origin !== origin || !/^https?:$/.test(parsed.protocol)) continue;
+    const canonical = url.replace(/#.*$/, "");
+    if (seen.has(canonical)) continue;
+    const label = normalizeTitle(a);
+    if (!label || label.length > 65 || /^(首页|上一页|下一页|返回|更多|全部)$/i.test(label)) continue;
+    seen.add(canonical);
+    out.push({ title: label, url: canonical });
+    if (out.length >= 150) break;
+  }
+  return out;
+}
