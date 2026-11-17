@@ -136,7 +136,7 @@ pub async fn hub_download_media(
     let target = public_target(&url)?;
     let ext = target.path().rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     if ext != "mp4" && ext != "webm" {
-        return Err("首个版本只支持网站允许下载的 MP4 / WebM 直链，暂不支持 HLS / DRM".into());
+        return Err("直链下载仅支持 MP4/WebM；HLS 请使用独立的离线下载入口".into());
     }
 
     let mut response = crate::net::get(&url, Duration::from_secs(600), None, None).await?;
@@ -203,7 +203,11 @@ pub fn hub_remove_download(app: tauri::AppHandle, id: String) -> Result<(), Stri
     }
     let mut items = load_index(&app)?;
     let item = items.iter().find(|it| it.id == id).cloned().ok_or("没有找到下载文件")?;
-    std::fs::remove_file(download_root(&app)?.join(&item.filename)).map_err(|e| e.to_string())?;
+    if item.content_type == "application/vnd.apple.mpegurl" {
+        std::fs::remove_dir_all(download_root(&app)?.join(&item.id)).map_err(|e| e.to_string())?;
+    } else {
+        std::fs::remove_file(download_root(&app)?.join(&item.filename)).map_err(|e| e.to_string())?;
+    }
     items.retain(|it| it.id != id);
     save_index(&app, &items)
 }
@@ -273,5 +277,290 @@ pub async fn serve_offline(
                 .body(bytes).unwrap()
         }
         Err(_) => text_response(416, "invalid offline range or file"),
+    }
+}
+
+
+// Offline HLS downloader. This is for unencrypted, finite VOD that the user
+// is authorized to save. It does not fetch encryption keys or bypass DRM.
+const MAX_HLS_ITEMS: usize = 3000;
+const MAX_HLS_SEG_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_HLS_PLAYLIST_BYTES: usize = 1024 * 1024;
+
+async fn hls_text(url: &str) -> Result<String, String> {
+    public_target(url)?;
+    let mut response = crate::net::get(
+        url, Duration::from_secs(25),
+        Some("application/vnd.apple.mpegurl,application/x-mpegURL,text/plain;q=0.8"),
+        None,
+    ).await?;
+    if !response.status().is_success() {
+        return Err(format!("HLS 播放列表 HTTP {}", response.status()));
+    }
+    if response.content_length().is_some_and(|n| n > MAX_HLS_PLAYLIST_BYTES as u64) {
+        return Err("播放列表超过 1MB 限制".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if bytes.len() + chunk.len() > MAX_HLS_PLAYLIST_BYTES {
+            return Err("播放列表超过 1MB 限制".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let value = String::from_utf8(bytes).map_err(|_| "HLS 不是 UTF-8 文本")?;
+    if !value.trim_start_matches('\u{feff}').starts_with("#EXTM3U") {
+        return Err("服务器没有返回 HLS 播放列表".into());
+    }
+    Ok(value)
+}
+
+fn hls_uri(base: &str, raw: &str) -> Result<String, String> {
+    let base = url::Url::parse(base).map_err(|_| "无效 HLS 基址")?;
+    let resolved = base.join(raw.trim()).map_err(|_| "无效 HLS 分片地址")?;
+    if resolved.scheme() != "https" {
+        return Err("离线 HLS 只允许 HTTPS 分片地址".into());
+    }
+    public_target(resolved.as_str())?;
+    Ok(resolved.into())
+}
+
+#[derive(Debug, Clone)]
+struct HlsSnapshot {
+    // Relative absolute HTTPS URL of segment plus its original EXTINF metadata.
+    segments: Vec<(String, String)>,
+    playlist: String,
+}
+
+fn hls_media_segments(source: &str, contents: &str, id: &str) -> Result<HlsSnapshot, String> {
+    let contents = contents.trim_start_matches('\u{feff}');
+    if !contents.starts_with("#EXTM3U") {
+        return Err("不是 HLS 播放列表".into());
+    }
+    if contents.contains("#EXT-X-STREAM-INF") || contents.contains("#EXT-X-I-FRAME-STREAM-INF") {
+        return Err("需要先解析 HLS 主播放列表".into());
+    }
+    if !contents.lines().any(|x| x.trim() == "#EXT-X-ENDLIST") {
+        return Err("该 HLS 没有 ENDLIST，可能是直播或尚未结束的流，不支持离线下载".into());
+    }
+    let mut output = String::from("#EXTM3U\n");
+    let mut items = Vec::new();
+    let mut extinf_count = 0usize;
+    for raw in contents.lines().skip(1) {
+        let line = raw.trim();
+        if line.is_empty() { continue; }
+        if line.starts_with("#EXT-X-KEY")
+            || line.starts_with("#EXT-X-SESSION-KEY")
+            || line.starts_with("#EXT-X-MAP")
+            || line.starts_with("#EXT-X-BYTERANGE")
+            || line.starts_with("#EXT-X-PART")
+            || line.starts_with("#EXT-X-PRELOAD-HINT")
+            || line.starts_with("#EXT-X-RENDITION-REPORT")
+            || line.contains("URI=")
+        {
+            return Err("该 HLS 使用加密、字节范围或特殊分片结构；为保证离线文件可靠，此版本不支持".into());
+        }
+        if line.starts_with('#') {
+            if line.starts_with("#EXTINF:") { extinf_count += 1; }
+            // Drop any metadata which may contain remote URLs or dynamic hints.
+            if line.starts_with("#EXT-X-DATERANGE") || line.starts_with("#EXT-X-START") { continue; }
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+        if items.len() >= MAX_HLS_ITEMS {
+            return Err("HLS 分片超过 3000 个，暂不支持".into());
+        }
+        let uri = hls_uri(source, line)?;
+        // Limit this first version to ordinary MPEG-TS, never mistake fMP4 for TS.
+        let path = url::Url::parse(&uri).map_err(|_| "分片地址无效")?.path().to_ascii_lowercase();
+        if !path.ends_with(".ts") {
+            return Err("此 HLS 使用非 TS 分片；暂不支持离线保存".into());
+        }
+        let filename = format!("seg-{:05}.ts", items.len());
+        output.push_str(&format!("/offline-hls?id={id}&file={filename}\n"));
+        items.push((uri, filename));
+    }
+    if items.is_empty() || extinf_count != items.len() {
+        return Err("没有识别到完整的 HLS 视频分片列表".into());
+    }
+    Ok(HlsSnapshot { segments: items, playlist: output })
+}
+
+async fn resolve_hls_media(url: &str) -> Result<(String, String), String> {
+    let mut next = url.to_string();
+    for _ in 0..3 {
+        let text = hls_text(&next).await?;
+        if !text.lines().any(|x| x.trim().starts_with("#EXT-X-STREAM-INF:")) {
+            return Ok((next, text));
+        }
+        let mut next_variant = None;
+        let mut waiting = false;
+        for line in text.lines() {
+            let l = line.trim();
+            if l.starts_with("#EXT-X-STREAM-INF:") { waiting = true; continue; }
+            if waiting && !l.is_empty() && !l.starts_with('#') {
+                next_variant = Some(hls_uri(&next, l)?);
+                break;
+            }
+        }
+        next = next_variant.ok_or("主播放列表没有可用清晰度线路")?;
+    }
+    Err("播放列表嵌套过多".into())
+}
+
+async fn save_single_hls_segment(
+    target: &str,
+    path: &std::path::Path,
+    remaining: u64,
+) -> Result<u64, String> {
+    use tokio::io::AsyncWriteExt;
+    public_target(target)?;
+    let mut response = crate::net::get(
+        target, Duration::from_secs(90), Some("video/mp2t,application/octet-stream,*/*;q=0.1"), None
+    ).await?;
+    if !response.status().is_success() {
+        return Err(format!("视频分片返回 HTTP {}", response.status()));
+    }
+    if response.content_length().is_some_and(|n| n > MAX_HLS_SEG_BYTES || n > remaining) {
+        return Err("HLS 分片大小超过限制".into());
+    }
+    let mut file = tokio::fs::File::create(path).await.map_err(|e| e.to_string())?;
+    let mut total = 0u64;
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        total += chunk.len() as u64;
+        if total > MAX_HLS_SEG_BYTES || total > remaining {
+            return Err("视频分片或总大小超过限制".into());
+        }
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    if total == 0 { return Err("视频分片为空".into()); }
+    Ok(total)
+}
+
+#[tauri::command]
+pub async fn hub_download_hls(
+    app: tauri::AppHandle,
+    url: String,
+    title: String,
+) -> Result<HubDownload, String> {
+    let _slot = DownloadSlot::take()?;
+    let target = public_target(&url)?;
+    if target.scheme() != "https" || !target.path().to_ascii_lowercase().ends_with(".m3u8") {
+        return Err("只支持 HTTPS 的普通 HLS 播放列表".into());
+    }
+    let (media_url, media_playlist) = resolve_hls_media(&url).await?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?.as_millis();
+    let id = format!("h{stamp}");
+    let snapshot = hls_media_segments(&media_url, &media_playlist, &id)?;
+    let dir = download_root(&app)?.join(&id);
+    tokio::fs::create_dir(&dir).await.map_err(|e| e.to_string())?;
+    let operation = async {
+        let mut completed = 0u64;
+        let total_parts = snapshot.segments.len();
+        for (number, (remote, filename)) in snapshot.segments.iter().enumerate() {
+            let size = save_single_hls_segment(
+                remote,
+                &dir.join(filename),
+                MAX_DOWNLOAD_BYTES.saturating_sub(completed),
+            ).await.map_err(|e| format!("下载第 {} 个视频分片失败：{e}", number + 1))?;
+            completed += size;
+            let _ = app.emit("hub-download-progress", serde_json::json!({
+                "received": completed,
+                "total": null,
+                "completedParts": number + 1,
+                "totalParts": total_parts,
+                "title": title,
+            }));
+        }
+        // Only after ALL segments finish is an offline playlist published.
+        tokio::fs::write(dir.join("index.m3u8"), snapshot.playlist.as_bytes())
+            .await.map_err(|e| e.to_string())?;
+        Ok::<u64, String>(completed)
+    }.await;
+    let bytes = match operation {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            return Err(error);
+        }
+    };
+    let item = HubDownload {
+        id,
+        title: title.trim().chars().take(120).collect(),
+        filename: "index.m3u8".into(),
+        bytes,
+        content_type: "application/vnd.apple.mpegurl".into(),
+    };
+    let mut items = load_index(&app)?;
+    items.push(item.clone());
+    if let Err(error) = save_index(&app, &items) {
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        return Err(error);
+    }
+    Ok(item)
+}
+
+/// Serve only stored, indexed local media. Remote URLs are never accepted here.
+pub async fn serve_hls_offline(
+    app: &tauri::AppHandle,
+    query: &str,
+) -> tauri::http::Response<Vec<u8>> {
+    let params: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(query.as_bytes()).into_owned().collect();
+    let id = params.get("id").map(String::as_str).unwrap_or("");
+    let name = params.get("file").map(String::as_str).unwrap_or("");
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return text_response(400, "invalid id");
+    }
+    let valid = name == "index.m3u8"
+        || (name.starts_with("seg-") && name.ends_with(".ts")
+            && name.len() == 12
+            && name[4..9].chars().all(|c| c.is_ascii_digit()));
+    if !valid { return text_response(400, "invalid filename"); }
+    let items = match load_index(app) {
+        Ok(items) => items,
+        Err(_) => return text_response(500, "offline index unavailable"),
+    };
+    if !items.iter().any(|x| x.id == id && x.content_type == "application/vnd.apple.mpegurl") {
+        return text_response(404, "offline HLS not found");
+    }
+    let path = match download_root(app) {
+        Ok(root) => root.join(id).join(name),
+        Err(_) => return text_response(500, "offline directory unavailable"),
+    };
+    let contents = match tokio::fs::read(&path).await {
+        Ok(value) if !value.is_empty() && value.len() <= MAX_HLS_SEG_BYTES as usize => value,
+        _ => return text_response(404, "offline file unavailable"),
+    };
+    tauri::http::Response::builder()
+        .status(200)
+        .header("Content-Type", if name.ends_with(".m3u8") {
+            "application/vnd.apple.mpegurl"
+        } else { "video/mp2t" })
+        .header("Content-Length", contents.len().to_string())
+        .header("Cache-Control", "private, no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(contents).unwrap()
+}
+
+#[cfg(test)]
+mod hls_snapshot_tests {
+    use super::*;
+    #[test]
+    fn rejects_encryption_and_live_streams() {
+        let encrypted = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXTINF:4,\na.ts\n#EXT-X-ENDLIST\n";
+        assert!(hls_media_segments("https://example.org/list.m3u8", encrypted, "h1").is_err());
+        let live = "#EXTM3U\n#EXTINF:4,\na.ts\n";
+        assert!(hls_media_segments("https://example.org/list.m3u8", live, "h1").is_err());
+    }
+    #[test]
+    fn rewrites_standard_ts_segments_to_private_offline_route() {
+        let media = "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:4.0,\nhttps://example.org/seg1.ts\n#EXTINF:4.0,\nseg2.ts\n#EXT-X-ENDLIST\n";
+        let result = hls_media_segments("https://example.org/list.m3u8", media, "h123").unwrap();
+        assert_eq!(result.segments.len(), 2);
+        assert!(result.playlist.contains("/offline-hls?id=h123&file=seg-00000.ts"));
+        assert!(result.playlist.contains("/offline-hls?id=h123&file=seg-00001.ts"));
     }
 }
