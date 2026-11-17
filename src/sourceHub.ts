@@ -146,6 +146,20 @@ function normalizePoster(a: Element, base: string): string | undefined {
   return absoluteUrl(base, url) || undefined;
 }
 
+/** Restrict hits to candidate work/detail routes instead of site navigation links. */
+function looksLikeWorkLink(sourceId: string, pathname: string): boolean {
+  const routes: Record<string, RegExp> = {
+    "nnyy": /^\/(?:dongman|dianying|dianshiju|zongyi|movie|tv|voddetail)\//i,
+    "bandai-channel": /^\/titles\/\d+(?:\/|$)/i,
+    "dm84": /^\/v\/\d+(?:\.html)?$/i,
+    "ikanbot": /^\/(?:play|movie|video|detail)\//i,
+    "iyf": /^\/(?:play|detail|video|movie)\//i,
+    "zhaojixie": /^\/(?:video|play|jilupian|archives)\//i,
+  };
+  const pattern = routes[sourceId];
+  return pattern ? pattern.test(pathname) : !/^\/(?:tag|category|search|index|user)\//i.test(pathname);
+}
+
 export function parsePublicSearch(html: string, pageUrl: string, source: HubSource, query: string): HubResult[] {
   const doc = new DOMParser().parseFromString(html, "text/html");
   for (const s of doc.querySelectorAll("script,style,noscript,nav,footer,header")) s.remove();
@@ -163,6 +177,7 @@ export function parsePublicSearch(html: string, pageUrl: string, source: HubSour
     if (parsed.hostname !== homepageHost && !parsed.hostname.endsWith("." + homepageHost)) continue;
     if (/\/(login|signup|register|user|account|category|tag|search)(\/|[?#]|$)/i.test(parsed.pathname)) continue;
     if (parsed.pathname === "/" && !parsed.search) continue;
+    if (!looksLikeWorkLink(source.id, parsed.pathname)) continue;
     // Require a keyword match to avoid returning all navigation links when a site ignores a search template.
     let decodedPath = parsed.pathname;
     try { decodedPath = decodeURIComponent(parsed.pathname); } catch { /* ignore invalid escapes */ }
