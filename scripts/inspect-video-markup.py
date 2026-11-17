@@ -84,6 +84,23 @@ def check_nnyy_public_episode():
    data=json.loads(raw)
    tracks=data.get("video_plays",[]) if isinstance(data,dict) else []
    print("=== nnyy public episode API ===")
+
+   if tracks and isinstance(tracks[0],dict) and isinstance(tracks[0].get("play_data"),str):
+    media_url=tracks[0]["play_data"]
+    # Verify only manifest header; don't download the video itself or expose signed URLs.
+    try:
+     media_req=urllib.request.Request(media_url,headers={
+       "User-Agent":"Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36",
+       "Accept":"application/vnd.apple.mpegurl,application/x-mpegURL,*/*",
+     })
+     with urllib.request.urlopen(media_req,timeout=12) as manifest:
+      prefix=manifest.read(120)
+      print("Nnyy HLS manifest check:",
+       json.dumps({"status":manifest.status,
+        "content_type":manifest.headers.get("Content-Type",""),
+        "is_hls":prefix.lstrip().startswith(b"#EXTM3U"),
+        "host":urlparse(media_url).hostname},ensure_ascii=False))
+    except Exception as e: print("Nnyy HLS manifest check:",str(e)[:180])
    print(json.dumps({"http_status":resp.status,"keys":list(data)[:20] if isinstance(data,dict) else [],
      "tracks":len(tracks),"track_keys":[list(x) for x in tracks[:3] if isinstance(x,dict)],
      "track_data_types":[
