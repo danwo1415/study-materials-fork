@@ -12,6 +12,7 @@ import {
 type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: string };
 
 function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offline" } }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
   if (media.type === "embed") {
     return <div className="space-y-2">
       <iframe src={media.url} title="视频站公开嵌入播放器" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
@@ -20,7 +21,6 @@ function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offl
       <div className="text-[11px] text-mut">此播放线路由第三方嵌入页面提供。若网站禁止嵌入，请使用下方「在原网站打开当前剧集」。</div>
     </div>;
   }
-  const videoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
