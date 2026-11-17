@@ -219,6 +219,26 @@ export function findDirectMedia(html: string, pageUrl: string): HubMedia[] {
     const abs = absoluteUrl(pageUrl, item.getAttribute("content") || "");
     if (abs && MEDIA.test(abs)) urls.add(abs);
   }
+  // Some providers publish playable, unprotected assets through JSON-LD VideoObject.
+  // Read only ordinary contentUrl; do not interpret scripts, tokens or DRM manifests.
+  for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const parsed: unknown = JSON.parse(script.textContent || "null");
+      const visit = (obj: unknown, depth: number): void => {
+        if (!obj || typeof obj !== "object" || depth > 4) return;
+        if (Array.isArray(obj)) { obj.forEach((x) => visit(x, depth + 1)); return; }
+        const data = obj as Record<string, unknown>;
+        const type = data["@type"];
+        const video = type === "VideoObject" || (Array.isArray(type) && type.includes("VideoObject"));
+        if (video && typeof data.contentUrl === "string") {
+          const abs = absoluteUrl(pageUrl, data.contentUrl);
+          if (abs && MEDIA.test(abs)) urls.add(abs);
+        }
+        if (data["@graph"]) visit(data["@graph"], depth + 1);
+      };
+      visit(parsed, 0);
+    } catch { /* ignore invalid JSON-LD */ }
+  }
   return [...urls].slice(0, 15).map((url) => ({
     url,
     type: /\.m3u8(?:[?#]|$)/i.test(url) ? "hls" : /\.webm(?:[?#]|$)/i.test(url) ? "webm" : "mp4",
