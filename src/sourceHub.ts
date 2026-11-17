@@ -300,6 +300,28 @@ export type HubEpisode = {
   url: string;
 };
 export function findPublicEpisodes(html: string, pageUrl: string, sourceId: string): HubEpisode[] {
+  // Nnyy exposes episode buttons instead of ordinary <a href> episode pages.
+  // Its public UI selects an episode through GET /_gp/<work-id>/<ep-slug>.
+  if (sourceId === "nnyy") {
+    const workId = /\/(?:dongman|dianying|dianshiju|zongyi|movie|tv|voddetail)\/(\d+)\.html(?:[?#]|$)/i.exec(pageUrl)?.[1];
+    if (workId) {
+      const document = new DOMParser().parseFromString(html, "text/html");
+      const buttons = [...document.querySelectorAll("[ep_slug]")];
+      const out: HubEpisode[] = [];
+      const seen = new Set<string>();
+      for (const button of buttons) {
+        const slug = button.getAttribute("ep_slug") || "";
+        if (!/^[a-z0-9_-]{1,48}$/i.test(slug) || seen.has(slug)) continue;
+        seen.add(slug);
+        out.push({
+          title: (button.textContent || button.getAttribute("title") || slug).trim().slice(0, 65) || slug,
+          url: new URL("/_gp/" + workId + "/" + slug, pageUrl).href,
+        });
+      }
+      if (out.length) return out;
+    }
+  }
+
   const doc = new DOMParser().parseFromString(html, "text/html");
   for (const n of doc.querySelectorAll("script,style,noscript,nav,footer,header")) n.remove();
   const origin = new URL(pageUrl).origin;
@@ -329,4 +351,42 @@ export function findPublicEpisodes(html: string, pageUrl: string, sourceId: stri
     if (out.length >= 150) break;
   }
   return out;
+}
+
+
+/** Public ordinary episode selector of nnyy.in; not a DRM or login bypass. */
+export async function fetchNnyyEpisode(episodeUrl: string): Promise<HubMedia[]> {
+  const target = new URL(episodeUrl);
+  if (target.protocol !== "https:" || target.hostname !== "nnyy.in" ||
+      !/^\/_gp\/[0-9]+\/[a-zA-Z0-9_-]{1,48}$/.test(target.pathname)) {
+    throw new Error("无效的努努影院选集地址");
+  }
+  const payload = await invoke<unknown>("hub_fetch_public_json", { url: target.href });
+  if (!payload || typeof payload !== "object") {
+    throw new Error("选集接口未返回播放线路");
+  }
+  const tracks = (payload as { video_plays?: unknown }).video_plays;
+  if (!Array.isArray(tracks)) {
+    throw new Error("选集接口缺少 video_plays");
+  }
+  const seen = new Set<string>();
+  const result: HubMedia[] = [];
+  for (const item of tracks) {
+    if (!item || typeof item !== "object") continue;
+    const value = (item as { play_data?: unknown }).play_data;
+    if (typeof value !== "string" || value.length > 2500) continue;
+    try {
+      const mediaUrl = new URL(value);
+      if (mediaUrl.protocol !== "https:" && mediaUrl.protocol !== "http:") continue;
+      if (seen.has(mediaUrl.href)) continue;
+      const kind = /\.m3u8(?:[?#]|$)/i.test(mediaUrl.href)
+        ? "hls" : /\.mp4(?:[?#]|$)/i.test(mediaUrl.href)
+          ? "mp4" : /\.webm(?:[?#]|$)/i.test(mediaUrl.href)
+            ? "webm" : null;
+      if (!kind) continue;
+      seen.add(mediaUrl.href);
+      result.push({ url: mediaUrl.href, type: kind });
+    } catch { /* ignore unusable playback records */ }
+  }
+  return result;
 }
