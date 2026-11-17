@@ -13,17 +13,9 @@ type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: st
 
 function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offline" } }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  if (media.type === "embed") {
-    return <div className="space-y-2">
-      <iframe src={media.url} title="视频站公开嵌入播放器" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
-        referrerPolicy="strict-origin-when-cross-origin" allow="autoplay; fullscreen; picture-in-picture"
-        allowFullScreen className="w-full aspect-video bg-black rounded-(--r-md)" />
-      <div className="text-[11px] text-mut">此播放线路由第三方嵌入页面提供。若网站禁止嵌入，请使用下方「在原网站打开当前剧集」。</div>
-    </div>;
-  }
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || media.type === "embed") return;
     let hls: Hls | undefined;
     if (media.type === "hls" && Hls.isSupported()) {
       hls = new Hls({ enableWorker: false });
@@ -38,6 +30,14 @@ function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offl
     }
     return () => { hls?.destroy(); video.removeAttribute("src"); video.load(); };
   }, [media.url, media.type]);
+  if (media.type === "embed") {
+    return <div className="space-y-2">
+      <iframe src={media.url} title="视频站公开嵌入播放器" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+        referrerPolicy="strict-origin-when-cross-origin" allow="autoplay; fullscreen; picture-in-picture"
+        allowFullScreen className="w-full aspect-video bg-black rounded-(--r-md)" />
+      <div className="text-[11px] text-mut">此播放线路由第三方嵌入页面提供。若网站禁止嵌入，请使用下方「在原网站打开当前剧集」。</div>
+    </div>;
+  }
   return <video ref={videoRef} controls playsInline preload="metadata"
     className="w-full max-h-[270px] bg-black rounded-(--r-md)" />;
 }
