@@ -87,7 +87,7 @@ pub fn run() {
                 let resource = url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
                     .find(|(key, _)| key == "u")
                     .map(|(_, value)| playback_log::resource_id(&value));
-                let route = match request.uri().path() { "/hls" => "playlist", "/seg" => "segment_or_key", "/img" => "image", "/offline" => "offline", _ => "unknown" };
+                let route = match request.uri().path() { "/hls" => "playlist", "/seg" => "segment_or_key", "/img" => "image", "/offline" => "offline", "/offline-hls" => "offline_hls", _ => "unknown" };
                 let range = request.headers().get("Range").and_then(|v| v.to_str().ok())
                     .filter(|v| v.len() <= 100 && v.bytes().all(|b| b.is_ascii_digit() || b"bytes=,- ".contains(&b)));
                 let origin_kind = match request_origin.as_deref() { None => "missing", Some("null") => "null", Some(origin) if allowed_frontend_origin(origin) => "app", _ => "other" };
@@ -118,6 +118,8 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let mut resp = if path == "/offline" {
                     source_hub::serve_offline(&app_for_offline, &query, range_header.as_deref()).await
+                } else if path == "/offline-hls" {
+                    source_hub::serve_hls_offline(&app_for_offline, &query).await
                 } else {
                     media::handle(&path, &query, media::LOCAL_ORIGIN).await
                 };
@@ -177,6 +179,7 @@ pub fn run() {
             source_hub::hub_fetch_html,
             source_hub::hub_fetch_public_json,
             source_hub::hub_download_media,
+            source_hub::hub_download_hls,
             source_hub::hub_list_downloads,
             source_hub::hub_remove_download,
         ])
