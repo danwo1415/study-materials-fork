@@ -62,6 +62,12 @@ export default function SourceHub() {
   const [downloadProgress, setDownloadProgress] = useState("");
   const [view, setView] = useState<"search" | "sites" | "downloads">("search");
   const searchCounter = useRef(0);
+  const hubRoot = useRef<HTMLDivElement>(null);
+
+  const scrollToHubTop = () => {
+    const viewport = hubRoot.current?.closest(".scroll-y");
+    if (viewport instanceof HTMLElement) viewport.scrollTop = 0;
+  };
 
   useEffect(() => { saveHubSources(sources); }, [sources]);
   useEffect(() => {
@@ -134,6 +140,7 @@ export default function SourceHub() {
 
   const openResult = async (result: HubResult) => {
     setSelected(result);
+    scrollToHubTop();
     setMedia([]);
     setEpisodes([]);
     setActiveEpisode(null);
@@ -185,15 +192,25 @@ export default function SourceHub() {
     } catch (e) { setMessage((e as Error).message); }
   };
 
+  const closeDetail = () => {
+    setSelected(null);
+    setActiveEpisode(null);
+    setEpisodes([]);
+    setMedia([]);
+    setMessage("");
+    scrollToHubTop();
+  };
+
   const btn = "px-3 py-2 rounded-(--r-ctl) bg-s3 text-on text-[12px] pressable";
   const field = "w-full min-w-0 p-2.5 rounded-(--r-sm) bg-s3 text-on text-[12px] outline-none border border-white/10";
-  return <div className="flex flex-col gap-3 text-on">
+  return <div ref={hubRoot} className="flex flex-col gap-3 text-on">
     <div className="flex gap-2">
       <button className={btn + (view === "search" ? " bg-primary text-on-primary" : "")} onClick={() => setView("search")}>聚合搜索</button>
       <button className={btn + (view === "sites" ? " bg-primary text-on-primary" : "")} onClick={() => setView("sites")}>管理网站</button>
       <button className={btn + (view === "downloads" ? " bg-primary text-on-primary" : "")} onClick={() => setView("downloads")}>离线 ({downloads.length})</button>
     </div>
     {view === "search" && <>
+      {!selected && <>
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void searchAll(query); }}>
         <input className={field + " flex-1"} value={query} onChange={(e) => setQuery(e.target.value)}
           placeholder="输入任意动漫、电影或纪录片名称" />
@@ -223,8 +240,10 @@ export default function SourceHub() {
           </div>
         </button>)}
       </div>}
-      {selected && <div className="rounded-(--r-md) bg-s2 p-3 space-y-2">
-        <div className="font-semibold text-[14px]">{selected.title}</div>
+      </>}
+      {selected && <div className="rounded-(--r-md) bg-s2 p-3 space-y-3">
+        <button type="button" className={btn + " self-start"} onClick={closeDetail}>← 返回搜索结果</button>
+        <div className="font-semibold text-[17px]">{selected.title}</div>
         <div className="text-[11px] text-mut">{selected.sourceName}{selected.sourceId === "nnyy" ? " · 已支持公开选集接口" : ""}</div>
         {episodes.length > 0 && <div className="space-y-2">
           <div className="text-[12px] font-semibold">公开剧集 / 播放入口（{episodes.length}）</div>
@@ -233,7 +252,7 @@ export default function SourceHub() {
               onClick={() => { void openEpisode(ep); }}>{ep.title}</button>)}</div>
         </div>}
         {episodes.length > 0 && !activeEpisode && <div className="text-[11px] text-mut">请先选择上面的剧集，才能加载对应的视频线路。</div>}
-        {detailLoading ? <div className="text-xs">正在分析公开播放地址…</div> : media.length ? media.map((m, i) =>
+        {detailLoading ? <div className="text-[13px] rounded-(--r-sm) bg-s3 p-3" role="status">正在获取剧集及播放线路，请查看网络连接…</div> : media.length ? media.map((m, i) =>
           <div key={m.url} className="space-y-2 border-t border-white/10 pt-2">
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
             <EmbeddedVideo media={m} />
@@ -244,7 +263,7 @@ export default function SourceHub() {
         {activeEpisode && <button className={btn} onClick={() => { void api.openUrl(activeEpisode.url); }}>在原网站打开当前剧集</button>}
         <button className={btn} onClick={() => { void api.openUrl(selected.url); }}>在原网站打开详情</button>
       </div>}
-      {!searching && !results.length && query.trim() && Object.keys(statuses).length > 0 &&
+      {!selected && !searching && !results.length && query.trim() && Object.keys(statuses).length > 0 &&
         <p className="text-[12px] text-mut">未找到候选结果。可到「管理网站」中调整搜索规则，或使用原网站搜索。</p>}
     </>}
     {view === "sites" && <>
