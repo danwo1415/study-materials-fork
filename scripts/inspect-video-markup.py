@@ -117,6 +117,23 @@ def check_nnyy_public_episode():
           child_content=child_resp.read(150000).decode("utf-8","replace")
           child_tags=[line.strip().split(":",1)[0] for line in child_content.splitlines() if line.startswith("#")]
           uris=[line.strip() for line in child_content.splitlines() if line.strip() and not line.startswith("#")]
+          if uris:
+           first_seg=urljoin(child_url,uris[0])
+           try:
+            segment_req=urllib.request.Request(first_seg,headers={
+              "User-Agent":"Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36",
+              "Range":"bytes=0-375",
+            })
+            with urllib.request.urlopen(segment_req,timeout=15) as segment_resp:
+             sample=segment_resp.read(376)
+             print("Nnyy TS segment probe:",json.dumps({
+               "status":segment_resp.status,
+               "type":segment_resp.headers.get("Content-Type"),
+               "length":segment_resp.headers.get("Content-Length"),
+               "has_mpeg_ts_sync":len(sample)>=376 and sample[0]==0x47 and sample[188]==0x47,
+               "sample_bytes":len(sample)
+             },ensure_ascii=False))
+           except Exception as e:print("Nnyy TS segment probe:",str(e)[:150])
           print("Nnyy child HLS:",json.dumps({
             "http_status":child_resp.status,
             "has_endlist":"#EXT-X-ENDLIST" in child_tags,
