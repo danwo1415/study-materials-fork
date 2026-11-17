@@ -43,9 +43,13 @@ const defaultSites: HubSource[] = videoSourceCandidates.map((s) => ({
     ? "https://www1.ikanbot.com/search?q={query}"
     : s.id === "bandai-channel"
       ? "https://www.b-ch.com/search/?search_txt={query}"
-      : new URL("?s={query}", s.homepage).href.replace("%7Bquery%7D", "{query}"),
+      : s.id === "dm84"
+        ? "https://dm84.tv/s----------.html?wd={query}"
+        : s.id === "nnyy"
+          ? "https://nnyy.in/so?q={query}"
+          : new URL("?s={query}", s.homepage).href.replace("%7Bquery%7D", "{query}"),
   enabled: true,
-  configured: s.id === "ikanbot" || s.id === "bandai-channel",
+  configured: ["ikanbot", "bandai-channel", "dm84", "nnyy"].includes(s.id),
 }));
 
 export function readHubSources(): HubSource[] {
@@ -149,7 +153,7 @@ function normalizePoster(a: Element, base: string): string | undefined {
 /** Restrict hits to candidate work/detail routes instead of site navigation links. */
 function looksLikeWorkLink(sourceId: string, pathname: string): boolean {
   const routes: Record<string, RegExp> = {
-    "nnyy": /^\/(?:dongman|dianying|dianshiju|zongyi|movie|tv|voddetail)\//i,
+    "nnyy": /^\/(?:dongman|dianying|dianshiju|zongyi|movie|tv|voddetail)\/[^/]+\.(?:html?)$/i,
     "bandai-channel": /^\/titles\/\d+(?:\/|$)/i,
     "dm84": /^\/v\/\d+(?:\.html)?$/i,
     "ikanbot": /^\/(?:play|movie|video|detail)\//i,
