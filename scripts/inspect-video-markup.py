@@ -98,6 +98,36 @@ def check_nnyy_public_episode():
       prefix=manifest.read(131072)
       content=prefix.decode("utf-8","replace")
       tags=[line.strip().split(":",1)[0] for line in content.splitlines() if line.startswith("#")]
+      if "#EXT-X-STREAM-INF:" in content:
+       from urllib.parse import urljoin
+       variant_lines=content.splitlines()
+       variant_uri=None
+       for index,line in enumerate(variant_lines):
+        if line.startswith("#EXT-X-STREAM-INF:"):
+         variant_uri=next((x.strip() for x in variant_lines[index+1:] if x.strip() and not x.startswith("#")),None)
+         break
+       if variant_uri:
+        child_url=urljoin(media_url,variant_uri)
+        try:
+         child_req=urllib.request.Request(child_url,headers={
+           "User-Agent":"Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36",
+           "Accept":"application/vnd.apple.mpegurl,application/x-mpegURL,*/*",
+         })
+         with urllib.request.urlopen(child_req,timeout=15) as child_resp:
+          child_content=child_resp.read(150000).decode("utf-8","replace")
+          child_tags=[line.strip().split(":",1)[0] for line in child_content.splitlines() if line.startswith("#")]
+          uris=[line.strip() for line in child_content.splitlines() if line.strip() and not line.startswith("#")]
+          print("Nnyy child HLS:",json.dumps({
+            "http_status":child_resp.status,
+            "has_endlist":"#EXT-X-ENDLIST" in child_tags,
+            "has_key":"#EXT-X-KEY" in child_tags or "#EXT-X-SESSION-KEY" in child_tags,
+            "has_map":"#EXT-X-MAP" in child_tags,
+            "has_byterange":"#EXT-X-BYTERANGE" in child_tags,
+            "segment_count":len(uris),
+            "extensions":list(sorted(set(urlparse(urljoin(child_url,x)).path.rsplit(".",1)[-1] for x in uris)))[:8],
+            "tags":sorted(set(child_tags))[:25],
+          },ensure_ascii=False))
+        except Exception as e:print("Nnyy child HLS:",str(e)[:150])
       print("Nnyy HLS manifest check:",
        json.dumps({"status":manifest.status,
         "content_type":manifest.headers.get("Content-Type",""),
