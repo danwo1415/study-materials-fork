@@ -69,6 +69,31 @@ def _safe_url(x):
  except Exception:pass
  return x[:140]
 
+
+# Inspect only metadata, not full media URLs, of the site's public episode response.
+def check_nnyy_public_episode():
+ url="https://nnyy.in/_gp/20096378/ep26"
+ req=urllib.request.Request(url,headers={
+   "User-Agent":"Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36",
+   "Accept":"application/json,text/javascript,*/*;q=0.1",
+   "Referer":"https://nnyy.in/dongman/20096378.html",
+ })
+ try:
+  with urllib.request.urlopen(req,timeout=15) as resp:
+   raw=resp.read(150000)
+   data=json.loads(raw)
+   tracks=data.get("video_plays",[]) if isinstance(data,dict) else []
+   print("=== nnyy public episode API ===")
+   print(json.dumps({"http_status":resp.status,"keys":list(data)[:20] if isinstance(data,dict) else [],
+     "tracks":len(tracks),"track_keys":[list(x) for x in tracks[:3] if isinstance(x,dict)],
+     "track_data_types":[
+       {"type":type(x.get("play_data")).__name__,
+        "media_extension":(urlparse(x.get("play_data","")).path.rsplit(".",1)[-1] if isinstance(x.get("play_data"),str) else None),
+        "media_host":(urlparse(x.get("play_data","")).hostname if isinstance(x.get("play_data"),str) else None)
+       } for x in tracks[:3] if isinstance(x,dict)
+     ]},ensure_ascii=False))
+ except Exception as e:print("=== nnyy public episode API ===\n"+str(e)[:250])
+
 with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
  for name,record in sorted(pool.map(lambda x:inspect(*x),PAGES.items())):
   print("\n=== "+name+" ===")
