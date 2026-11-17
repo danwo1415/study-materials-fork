@@ -95,12 +95,21 @@ def check_nnyy_public_episode():
        "Accept":"application/vnd.apple.mpegurl,application/x-mpegURL,*/*",
      })
      with urllib.request.urlopen(media_req,timeout=12) as manifest:
-      prefix=manifest.read(120)
+      prefix=manifest.read(131072)
+      content=prefix.decode("utf-8","replace")
+      tags=[line.strip().split(":",1)[0] for line in content.splitlines() if line.startswith("#")]
       print("Nnyy HLS manifest check:",
        json.dumps({"status":manifest.status,
         "content_type":manifest.headers.get("Content-Type",""),
         "is_hls":prefix.lstrip().startswith(b"#EXTM3U"),
-        "host":urlparse(media_url).hostname},ensure_ascii=False))
+        "host":urlparse(media_url).hostname,
+        "has_key":any(x.startswith("#EXT-X-KEY") or x.startswith("#EXT-X-SESSION-KEY") for x in tags),
+        "has_variants":"#EXT-X-STREAM-INF" in tags,
+        "has_map":"#EXT-X-MAP" in tags,
+        "has_byterange":"#EXT-X-BYTERANGE" in tags,
+        "has_endlist":"#EXT-X-ENDLIST" in tags,
+        "segment_count":sum(1 for line in content.splitlines() if line and not line.startswith("#")),
+        "tags":sorted(set(tags))[:30]},ensure_ascii=False))
     except Exception as e: print("Nnyy HLS manifest check:",str(e)[:180])
    print(json.dumps({"http_status":resp.status,"keys":list(data)[:20] if isinstance(data,dict) else [],
      "tracks":len(tracks),"track_keys":[list(x) for x in tracks[:3] if isinstance(x,dict)],
