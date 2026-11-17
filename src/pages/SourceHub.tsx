@@ -245,6 +245,12 @@ export default function SourceHub() {
         <button type="button" className={btn + " self-start"} onClick={closeDetail}>← 返回搜索结果</button>
         <div className="font-semibold text-[17px]">{selected.title}</div>
         <div className="text-[11px] text-mut">{selected.sourceName}{selected.sourceId === "nnyy" ? " · 已支持公开选集接口" : ""}</div>
+        {selected.sourceId === "ikanbot" && <div className="rounded-(--r-sm) bg-s3 p-3 space-y-2">
+          <div className="text-[12px] font-semibold">iKanBot 的播放需要网站动态授权</div>
+          <div className="text-[11px] text-mut">已确认其网页播放器使用带 token 的接口加载视频，并设置 SAMEORIGIN 禁止跨网站嵌入。此版本可展示搜索结果，但尚未获得能在本 App 内稳定播放的授权接口。</div>
+          <button type="button" className={btn} onClick={() => { void api.openUrl(selected.url); }}>前往 iKanBot 原站播放</button>
+        </div>}
+
         {episodes.length > 0 && <div className="space-y-2">
           <div className="text-[12px] font-semibold">公开剧集 / 播放入口（{episodes.length}）</div>
           <div className="flex flex-wrap gap-2 max-h-44 overflow-auto">{episodes.map((ep) =>
