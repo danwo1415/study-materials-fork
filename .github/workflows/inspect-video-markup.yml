@@ -1,0 +1,21 @@
+name: Inspect video page markup
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/inspect-video-markup.py"
+      - ".github/workflows/inspect-video-markup.yml"
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Inspect public player and episode markup (no video downloads)
+        run: python scripts/inspect-video-markup.py
