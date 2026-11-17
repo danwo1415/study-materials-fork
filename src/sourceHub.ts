@@ -314,6 +314,8 @@ export function findAllowedSiteEmbeds(html: string, pageUrl: string): HubMedia[]
 export const listHubDownloads = () => invoke<HubDownload[]>("hub_list_downloads");
 export const downloadHubMedia = (url: string, title: string) =>
   invoke<HubDownload>("hub_download_media", { url, title });
+export const downloadHubHls = (url: string, title: string) =>
+  invoke<HubDownload>("hub_download_hls", { url, title });
 export const deleteHubDownload = (id: string) => invoke<void>("hub_remove_download", { id });
 
 
