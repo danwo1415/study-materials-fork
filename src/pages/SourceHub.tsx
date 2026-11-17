@@ -11,11 +11,73 @@ import {
 
 type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: string };
 
-function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offline" | "offline-hls" } }) {
+type AdSpan = { start: number; end: number };
+const AD_SECONDS = 6;
+const AD_STORAGE_PREFIX = "hghub-ad-skips-v1:";
+
+function readAdSkips(key: string): AdSpan[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(AD_STORAGE_PREFIX + key) || "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is AdSpan =>
+      !!item && typeof item === "object" &&
+      typeof item.start === "number" && Number.isFinite(item.start) && item.start >= 0 &&
+      typeof item.end === "number" && Number.isFinite(item.end) &&
+      item.end > item.start && item.end - item.start <= 30
+    ).slice(0, 30);
+  } catch { return []; }
+}
+function adSkipLabel(seconds: number) {
+  const mins = Math.floor(seconds / 60);
+  return mins + ":" + String(Math.floor(seconds % 60)).padStart(2, "0");
+}
+
+
+function EmbeddedVideo({ media, adMarkerKey }: {
+  media: HubMedia | { url: string; type: "offline" | "offline-hls" };
+  adMarkerKey?: string;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [adSpans, setAdSpans] = useState<AdSpan[]>(() => adMarkerKey ? readAdSkips(adMarkerKey) : []);
+  const [adNotice, setAdNotice] = useState("");
+  const spansRef = useRef(adSpans);
+  useEffect(() => { spansRef.current = adSpans; }, [adSpans]);
+  useEffect(() => {
+    if (adMarkerKey) localStorage.setItem(AD_STORAGE_PREFIX + adMarkerKey, JSON.stringify(adSpans));
+  }, [adMarkerKey, adSpans]);
+
+  const markAd = () => {
+    const video = videoRef.current;
+    if (!video || !adMarkerKey || !Number.isFinite(video.currentTime)) return;
+    const start = video.currentTime;
+    const end = start + AD_SECONDS;
+    // Overlapping manual marks describe one advertisement, not multiple skips.
+    const next = [...adSpans.filter((span) => span.end < start || span.start > end), { start, end }]
+      .sort((a, b) => a.start - b.start).slice(-30);
+    setAdSpans(next);
+    video.currentTime = Number.isFinite(video.duration)
+      ? Math.min(Math.max(0, video.duration - 0.1), end + 0.1) : end + 0.1;
+    setAdNotice("已记住 " + adSkipLabel(start) + " 起的 " + AD_SECONDS + " 秒，下次自动跳过");
+  };
+  const clearAdMarks = () => {
+    setAdSpans([]);
+    setAdNotice("已清除这集的广告时间记录");
+  };
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || media.type === "embed") return;
+    const skipMarkedAd = () => {
+      const time = video.currentTime;
+      const matched = spansRef.current.find((span) => time >= span.start && time < span.end);
+      if (matched) {
+        const jump = Number.isFinite(video.duration)
+          ? Math.min(Math.max(0, video.duration - 0.1), matched.end + 0.1)
+          : matched.end + 0.1;
+        if (jump > time) video.currentTime = jump;
+      }
+    };
+    if (adMarkerKey) video.addEventListener("timeupdate", skipMarkedAd);
     let hls: Hls | undefined;
     if ((media.type === "hls" || media.type === "offline-hls") && Hls.isSupported()) {
       hls = new Hls({ enableWorker: false });
@@ -28,8 +90,13 @@ function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offl
     } else {
       video.src = LOCAL + "/seg?u=" + encodeURIComponent(media.url);
     }
-    return () => { hls?.destroy(); video.removeAttribute("src"); video.load(); };
-  }, [media.url, media.type]);
+    return () => {
+      video.removeEventListener("timeupdate", skipMarkedAd);
+      hls?.destroy();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [media.url, media.type, adMarkerKey]);
   if (media.type === "embed") {
     return <div className="space-y-2">
       <iframe src={media.url} title="视频站公开嵌入播放器" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
@@ -38,8 +105,26 @@ function EmbeddedVideo({ media }: { media: HubMedia | { url: string; type: "offl
       <div className="text-[11px] text-mut">此播放线路由第三方嵌入页面提供。若网站禁止嵌入，请使用下方「在原网站打开当前剧集」。</div>
     </div>;
   }
-  return <video ref={videoRef} controls playsInline preload="metadata"
-    className="w-full max-h-[270px] bg-black rounded-(--r-md)" />;
+  return <div className="space-y-2">
+    <video ref={videoRef} controls playsInline preload="metadata"
+      className="w-full max-h-[270px] bg-black rounded-(--r-md)" />
+    {adMarkerKey && <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={markAd}
+          className="px-3 py-2 rounded-(--r-ctl) bg-s3 text-on text-[12px] pressable">
+          广告开始时点：跳过并记住 6 秒
+        </button>
+        {adSpans.length > 0 && <button type="button" onClick={clearAdMarks}
+          className="px-3 py-2 rounded-(--r-ctl) bg-s3 text-on text-[12px] pressable">
+          清除广告标记
+        </button>}
+      </div>
+      <div className="text-[11px] text-mut">
+        已记住 {adSpans.length} 段；只按你标记的时间自动跳过，不会删除视频数据。
+      </div>
+      {adNotice && <div className="text-[11px] text-mut" role="status">{adNotice}</div>}
+    </div>}
+  </div>;
 }
 
 export default function SourceHub() {
@@ -264,7 +349,8 @@ export default function SourceHub() {
         {detailLoading ? <div className="text-[13px] rounded-(--r-sm) bg-s3 p-3" role="status">正在获取剧集及播放线路，请查看网络连接…</div> : media.length ? media.map((m, i) =>
           <div key={m.url} className="space-y-2 border-t border-white/10 pt-2">
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
-            <EmbeddedVideo media={m} />
+            <EmbeddedVideo key={m.url + "|" + (activeEpisode?.url || "")} media={m}
+              adMarkerKey={selected.sourceId === "nnyy" ? "nnyy|" + (activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title) : undefined} />
             {(m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
               onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频"}</button>}
             {m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
@@ -319,7 +405,8 @@ export default function SourceHub() {
       {downloads.length ? downloads.map((d) => <div key={d.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
         <div className="text-[13px] font-semibold">{d.title}</div>
         <div className="text-[11px] text-mut">{(d.bytes / 1048576).toFixed(1)} MB</div>
-        <EmbeddedVideo media={d.contentType === "application/vnd.apple.mpegurl"
+        <EmbeddedVideo adMarkerKey={d.contentType === "application/vnd.apple.mpegurl" ? "nnyy|" + d.title : undefined}
+          media={d.contentType === "application/vnd.apple.mpegurl"
           ? { url: LOCAL + "/offline-hls?id=" + encodeURIComponent(d.id) + "&file=index.m3u8", type: "offline-hls" }
           : { url: LOCAL + "/offline?id=" + encodeURIComponent(d.id), type: "offline" }} />
         <button className={btn} onClick={() => { void removeDownload(d.id); }}>删除本地文件</button>
