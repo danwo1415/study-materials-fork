@@ -121,6 +121,7 @@ def check_nnyy_public_episode():
             "http_status":child_resp.status,
             "has_endlist":"#EXT-X-ENDLIST" in child_tags,
             "has_key":"#EXT-X-KEY" in child_tags or "#EXT-X-SESSION-KEY" in child_tags,
+            "key_methods": sorted(set(re.search(r"METHOD=([^,]+)", line).group(1) for line in child_content.splitlines() if line.startswith("#EXT-X-KEY:") and re.search(r"METHOD=([^,]+)", line)))[:5],
             "has_map":"#EXT-X-MAP" in child_tags,
             "has_byterange":"#EXT-X-BYTERANGE" in child_tags,
             "segment_count":len(uris),
