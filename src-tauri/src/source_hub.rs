@@ -56,6 +56,33 @@ pub async fn hub_fetch_html(url: String) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
+/// Read a bounded, public JSON endpoint used by a site's ordinary episode selector.
+/// Requires strict network protections and does not forward login credentials.
+#[tauri::command]
+pub async fn hub_fetch_public_json(url: String) -> Result<serde_json::Value, String> {
+    public_target(&url)?;
+    let mut response = crate::net::get(
+        &url,
+        Duration::from_secs(18),
+        Some("application/json,text/javascript;q=0.9,*/*;q=0.2"),
+        None,
+    ).await?;
+    if !response.status().is_success() {
+        return Err(format!("公开剧集接口返回 HTTP {}", response.status()));
+    }
+    if response.content_length().is_some_and(|n| n > MAX_HTML_BYTES as u64) {
+        return Err("剧集数据超过 2MB 限制".into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if body.len() + chunk.len() > MAX_HTML_BYTES {
+            return Err("剧集 JSON 超过 2MB 限制".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| "剧集接口没有返回有效 JSON 数据".to_string())
+}
+
 fn download_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("hub-downloads");
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
