@@ -94,6 +94,7 @@ def check_nnyy_public_episode():
      ]},ensure_ascii=False))
  except Exception as e:print("=== nnyy public episode API ===\n"+str(e)[:250])
 
+check_nnyy_public_episode()
 with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
  for name,record in sorted(pool.map(lambda x:inspect(*x),PAGES.items())):
   print("\n=== "+name+" ===")
