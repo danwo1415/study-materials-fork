@@ -321,7 +321,7 @@ fn hls_uri(base: &str, raw: &str) -> Result<String, String> {
         return Err("离线 HLS 只允许 HTTPS 分片地址".into());
     }
     public_target(resolved.as_str())?;
-    Ok(resolved.into())
+    Ok(resolved.to_string())
 }
 
 #[derive(Debug, Clone)]
