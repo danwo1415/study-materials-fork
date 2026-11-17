@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 PAGES = {
  "nnyy": "https://nnyy.in/dongman/20096378.html",
  "dm84": "https://dm84.tv/v/1773.html",
+ "dm84-episode": "https://dm84.tv/p/1773-1-1.html",
  "ikanbot": "https://www1.ikanbot.com/play/381898",
  "bandai": "https://www.b-ch.com/titles/2277/001",
  "zhaojixie": "https://zhaojixie.com/category/jilupian.html",
