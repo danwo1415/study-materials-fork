@@ -34,7 +34,24 @@ export type HubDownload = {
 };
 
 const KEY = "hghub-multi-sources-v2";
-const defaultSites: HubSource[] = videoSourceCandidates.map((s) => ({
+
+/**
+ * Sites that do not satisfy the required trio (search + in-app playback +
+ * permitted offline downloads) are not offered as active sources.
+ * iKanBot is excluded until those capabilities are implemented and verified.
+ * Filter persisted V2 configs too, otherwise existing installations keep it.
+ */
+export function isExcludedHubSource(source: Pick<HubSource, "id" | "homepage">): boolean {
+  if (source.id === "ikanbot") return true;
+  try {
+    const host = new URL(source.homepage).hostname.toLowerCase();
+    return host === "ikanbot.com" || host.endsWith(".ikanbot.com");
+  } catch {
+    return false;
+  }
+}
+
+const defaultSites: HubSource[] = videoSourceCandidates.filter((s) => !isExcludedHubSource(s)).map((s) => ({
   id: s.id,
   name: s.name,
   homepage: s.homepage,
@@ -58,7 +75,8 @@ export function readHubSources(): HubSource[] {
     if (Array.isArray(parsed)) {
       const arr = parsed.filter((s): s is HubSource => !!s && typeof s.id === "string" &&
         typeof s.name === "string" && typeof s.homepage === "string" &&
-        typeof s.searchTemplate === "string" && typeof s.enabled === "boolean");
+        typeof s.searchTemplate === "string" && typeof s.enabled === "boolean" &&
+        !isExcludedHubSource(s));
       const ids = new Set(arr.map((x) => x.id));
       return [
         ...arr.map((x) => {
@@ -95,6 +113,9 @@ function requirePublicHttps(raw: string): URL {
 export function makeHubSource(url: string): HubSource {
   const u = requirePublicHttps(url.trim());
   const home = u.origin + "/";
+  if (isExcludedHubSource({ id: "", homepage: home })) {
+    throw new Error("iKanBot 尚未实现并验证搜索、App 内播放与下载，按要求不纳入视频源");
+  }
   return {
     id: "custom-" + Date.now().toString(36),
     name: u.hostname,
@@ -207,6 +228,7 @@ export async function searchPublicSite(source: HubSource, query: string): Promis
   template: string;
   discovered: boolean;
 }> {
+  if (isExcludedHubSource(source)) throw new Error("该网站尚未通过完整功能验收，已从聚合搜索排除");
   let resolved = source;
   let discovered = false;
   if (!source.configured) {
