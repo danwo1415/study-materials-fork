@@ -2,13 +2,15 @@
 //! This module does not circumvent DRM, authentication, or site restrictions.
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const OFFLINE_CHUNK_BYTES: u64 = 1024 * 1024;
 static DOWNLOADING: AtomicBool = AtomicBool::new(false);
+#[path = "resumable.rs"]
+mod resumable;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,75 +127,15 @@ impl Drop for DownloadSlot {
     fn drop(&mut self) { DOWNLOADING.store(false, Ordering::SeqCst); }
 }
 
+/// Resumable MP4/WebM download. Stable identity is supplied by the episode.
 #[tauri::command]
 pub async fn hub_download_media(
     app: tauri::AppHandle,
     url: String,
     title: String,
+    key: String,
 ) -> Result<HubDownload, String> {
-    use tokio::io::AsyncWriteExt;
-    let _slot = DownloadSlot::take()?;
-    let target = public_target(&url)?;
-    let ext = target.path().rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    if ext != "mp4" && ext != "webm" {
-        return Err("直链下载仅支持 MP4/WebM；HLS 请使用独立的离线下载入口".into());
-    }
-
-    let mut response = crate::net::get(&url, Duration::from_secs(600), None, None).await?;
-    if !response.status().is_success() {
-        return Err(format!("下载服务器返回 HTTP {}", response.status()));
-    }
-    let ctype = response.headers().get(reqwest::header::CONTENT_TYPE)
-        .and_then(|h| h.to_str().ok()).unwrap_or("").to_ascii_lowercase();
-    let allowed_type = ctype.starts_with("video/") || ctype.starts_with("application/octet-stream");
-    if !allowed_type {
-        return Err("服务器未返回视频文件，可能需要登录或视频受到保护".into());
-    }
-    let total = response.content_length();
-    if total.is_some_and(|n| n > MAX_DOWNLOAD_BYTES) {
-        return Err("视频超过 2GB 下载上限".into());
-    }
-
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis();
-    let id = format!("h{stamp}");
-    let filename = format!("{id}.{ext}");
-    let path = download_root(&app)?.join(&filename);
-    let temp_path = path.with_extension(format!("{ext}.part"));
-    let mut file = tokio::fs::File::create(&temp_path).await.map_err(|e| e.to_string())?;
-    let mut received = 0u64;
-
-    let transfer = async {
-        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-            received += chunk.len() as u64;
-            if received > MAX_DOWNLOAD_BYTES { return Err("超过 2GB 下载上限".to_string()); }
-            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-            let _ = app.emit("hub-download-progress", serde_json::json!({
-                "received": received, "total": total, "title": title
-            }));
-        }
-        file.flush().await.map_err(|e| e.to_string())?;
-        Ok::<(), String>(())
-    }.await;
-    if let Err(e) = transfer {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        return Err(e);
-    }
-    if received == 0 {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        return Err("服务器返回空文件".into());
-    }
-    tokio::fs::rename(&temp_path, &path).await.map_err(|e| e.to_string())?;
-    let item = HubDownload {
-        id,
-        title: title.trim().chars().take(120).collect(),
-        filename,
-        bytes: received,
-        content_type: if ext == "mp4" { "video/mp4" } else { "video/webm" }.into(),
-    };
-    let mut items = load_index(&app)?;
-    items.push(item.clone());
-    save_index(&app, &items)?;
-    Ok(item)
+    resumable::download_media(app, url, title, key).await
 }
 
 #[tauri::command]
@@ -416,98 +358,29 @@ async fn resolve_hls_media(url: &str) -> Result<(String, String), String> {
     Err("播放列表嵌套过多".into())
 }
 
-async fn save_single_hls_segment(
-    target: &str,
-    path: &std::path::Path,
-    remaining: u64,
-) -> Result<u64, String> {
-    use tokio::io::AsyncWriteExt;
-    public_target(target)?;
-    let mut response = crate::net::get(
-        target, Duration::from_secs(90), Some("video/mp2t,application/octet-stream,*/*;q=0.1"), None
-    ).await?;
-    if !response.status().is_success() {
-        return Err(format!("视频分片返回 HTTP {}", response.status()));
-    }
-    if response.content_length().is_some_and(|n| n > MAX_HLS_SEG_BYTES || n > remaining) {
-        return Err("HLS 分片大小超过限制".into());
-    }
-    let mut file = tokio::fs::File::create(path).await.map_err(|e| e.to_string())?;
-    let mut total = 0u64;
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-        total += chunk.len() as u64;
-        if total > MAX_HLS_SEG_BYTES || total > remaining {
-            return Err("视频分片或总大小超过限制".into());
-        }
-        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-    }
-    file.flush().await.map_err(|e| e.to_string())?;
-    if total == 0 { return Err("视频分片为空".into()); }
-    Ok(total)
-}
-
 #[tauri::command]
 pub async fn hub_download_hls(
     app: tauri::AppHandle,
     url: String,
     title: String,
+    key: String,
 ) -> Result<HubDownload, String> {
-    let _slot = DownloadSlot::take()?;
-    let target = public_target(&url)?;
-    if target.scheme() != "https" || !target.path().to_ascii_lowercase().ends_with(".m3u8") {
-        return Err("只支持 HTTPS 的普通 HLS 播放列表".into());
-    }
-    let (media_url, media_playlist) = resolve_hls_media(&url).await?;
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?.as_millis();
-    let id = format!("h{stamp}");
-    let snapshot = hls_media_segments(&media_url, &media_playlist, &id)?;
-    let dir = download_root(&app)?.join(&id);
-    tokio::fs::create_dir(&dir).await.map_err(|e| e.to_string())?;
-    let operation = async {
-        let mut completed = 0u64;
-        let total_parts = snapshot.segments.len();
-        for (number, (remote, filename)) in snapshot.segments.iter().enumerate() {
-            let size = save_single_hls_segment(
-                remote,
-                &dir.join(filename),
-                MAX_DOWNLOAD_BYTES.saturating_sub(completed),
-            ).await.map_err(|e| format!("下载第 {} 个视频分片失败：{e}", number + 1))?;
-            completed += size;
-            let _ = app.emit("hub-download-progress", serde_json::json!({
-                "received": completed,
-                "total": null,
-                "completedParts": number + 1,
-                "totalParts": total_parts,
-                "title": title,
-            }));
-        }
-        // Only after ALL segments finish is an offline playlist published.
-        tokio::fs::write(dir.join("index.m3u8"), snapshot.playlist.as_bytes())
-            .await.map_err(|e| e.to_string())?;
-        Ok::<u64, String>(completed)
-    }.await;
-    let bytes = match operation {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            let _ = tokio::fs::remove_dir_all(&dir).await;
-            return Err(error);
-        }
-    };
-    let item = HubDownload {
-        id,
-        title: title.trim().chars().take(120).collect(),
-        filename: "index.m3u8".into(),
-        bytes,
-        content_type: "application/vnd.apple.mpegurl".into(),
-    };
-    let mut items = load_index(&app)?;
-    items.push(item.clone());
-    if let Err(error) = save_index(&app, &items) {
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        return Err(error);
-    }
-    Ok(item)
+    resumable::download_hls(app, url, title, key).await
+}
+
+#[tauri::command]
+pub fn hub_list_pending_downloads(app: tauri::AppHandle) -> Result<Vec<resumable::PendingDownload>, String> {
+    resumable::list_pending(&app)
+}
+
+#[tauri::command]
+pub fn hub_discard_pending_download(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    resumable::discard_pending(&app, &id)
+}
+
+#[tauri::command]
+pub fn hub_pause_download() {
+    resumable::request_pause();
 }
 
 /// Serve only stored, indexed local media. Remote URLs are never accepted here.
