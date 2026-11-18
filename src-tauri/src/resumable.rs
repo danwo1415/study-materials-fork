@@ -171,6 +171,10 @@ fn emit_progress(app: &tauri::AppHandle, record: &ResumeRecord, received: u64, t
     }));
 }
 
+fn emit_status(app: &tauri::AppHandle, status: &str) {
+    let _ = app.emit("hub-download-status", status);
+}
+
 fn headers_record(response: &reqwest::Response, record: &mut ResumeRecord) {
     record.etag = response.headers().get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok()).map(str::to_owned);
@@ -265,8 +269,12 @@ pub async fn download_media(app: tauri::AppHandle, url: String, title: String, k
     let range = (prior_size > 0).then(|| format!("bytes={prior_size}-"));
     let validator = record.etag.as_deref().filter(|s| !s.starts_with("W/"))
         .or(record.last_modified.as_deref()).map(str::to_owned);
-    let mut response = crate::net::get_with_range(&url, Duration::from_secs(600), None, None,
-        range.as_deref(), if prior_size > 0 { validator.as_deref() } else { None }).await?;
+    emit_status(&app, if prior_size > 0 { "正在连接服务器，尝试断点续传…" } else { "正在连接视频服务器…" });
+    // Limit the time to first HTTP headers separately from the whole-file transfer.
+    let mut response = tokio::time::timeout(Duration::from_secs(25),
+        crate::net::get_with_range(&url, Duration::from_secs(600), None, None,
+            range.as_deref(), if prior_size > 0 { validator.as_deref() } else { None }))
+        .await.map_err(|_| "连接视频服务器超时（25秒），请重试".to_string())??;
     verify_media_type(&response)?;
     let total = expected_bytes(&response, prior_size, record.total)?;
     let restarting = prior_size > 0 && response.status() == reqwest::StatusCode::OK;
@@ -292,7 +300,12 @@ pub async fn download_media(app: tauri::AppHandle, url: String, title: String, k
         .append(prior_size > 0).truncate(prior_size == 0).open(&part).await.map_err(|e| e.to_string())?;
     let mut received = prior_size;
     emit_progress(&app, &record, received, total, None, None);
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+    loop {
+        check_pause()?;
+        let next = tokio::time::timeout(Duration::from_secs(25), response.chunk())
+            .await.map_err(|_| "视频传输超过25秒没有收到数据；已保留部分文件，可继续下载".to_string())?
+            .map_err(|e| e.to_string())?;
+        let Some(chunk) = next else { break; };
         check_pause()?;
         received = received.checked_add(chunk.len() as u64).ok_or("文件大小溢出")?;
         if received > MAX_DOWNLOAD_BYTES || total.is_some_and(|n| received > n) {
@@ -343,10 +356,16 @@ fn valid_segment(path: &Path) -> Option<u64> {
     (meta.is_file() && meta.len() > 0 && meta.len() <= MAX_HLS_SEG_BYTES).then_some(meta.len())
 }
 
-async fn atomic_hls_segment(target: &str, path: &Path, remaining: u64) -> Result<u64, String> {
+async fn atomic_hls_segment(
+    app: &tauri::AppHandle, record: &ResumeRecord, target: &str, path: &Path,
+    remaining: u64, base_received: u64, completed_parts: usize,
+) -> Result<u64, String> {
+    check_pause()?;
     public_target(target)?;
-    let mut response = crate::net::get(target,Duration::from_secs(90),
-        Some("video/mp2t,application/octet-stream,*/*;q=0.1"),None).await?;
+    let mut response = tokio::time::timeout(Duration::from_secs(25),
+        crate::net::get(target, Duration::from_secs(120),
+            Some("video/mp2t,application/octet-stream,*/*;q=0.1"), None))
+        .await.map_err(|_| "连接视频分片超时（25秒）".to_string())??;
     if !response.status().is_success() {
         return Err(format!("视频分片 HTTP {}",response.status()));
     }
@@ -357,13 +376,25 @@ async fn atomic_hls_segment(target: &str, path: &Path, remaining: u64) -> Result
     let partial = path.with_extension("ts.part");
     let mut file = tokio::fs::File::create(&partial).await.map_err(|e| e.to_string())?;
     let mut received = 0u64;
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+    let mut last_report = std::time::Instant::now();
+    loop {
+        check_pause()?;
+        let next = tokio::time::timeout(Duration::from_secs(25), response.chunk())
+            .await.map_err(|_| "视频分片25秒未收到数据".to_string())?
+            .map_err(|e| e.to_string())?;
+        let Some(chunk) = next else { break; };
         check_pause()?;
         received = received.checked_add(chunk.len() as u64).ok_or("分片大小溢出")?;
         if received > MAX_HLS_SEG_BYTES || received > remaining {
             return Err("分片或视频大小超限".into());
         }
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        // Show progress while the CURRENT segment downloads, not only after it is finished.
+        if last_report.elapsed() >= Duration::from_millis(500) || received == chunk.len() as u64 {
+            emit_progress(app, record, base_received + received, None,
+                Some(completed_parts), record.total_parts);
+            last_report = std::time::Instant::now();
+        }
     }
     if received == 0 { return Err("空的视频分片".into()); }
     if response.content_length().is_some_and(|n| n != received) {
@@ -388,6 +419,7 @@ pub async fn download_hls(app: tauri::AppHandle, url: String, title: String, key
     if let Some(completed) = check_completed(&app, &id)? { return Ok(completed); }
     let root = download_root(&app)?;
     let mut record = loaded_record(&root,&id,&key,"hls",&url,&title)?;
+    emit_status(&app, "正在获取并解析 HLS 播放列表…");
     let (media_url, media_playlist) = resolve_hls_media(&url).await?;
     let snapshot = hls_media_segments(&media_url,&media_playlist,&id)?;
     let fingerprint = playlist_fingerprint(&snapshot);
@@ -415,8 +447,29 @@ pub async fn download_hls(app: tauri::AppHandle, url: String, title: String, key
         let path = dir.join(filename);
         if valid_segment(&path).is_some() { continue; }
         let _ = tokio::fs::remove_file(&path).await;
-        let size = atomic_hls_segment(remote,&path,MAX_DOWNLOAD_BYTES.saturating_sub(completed))
-            .await.map_err(|e| format!("第 {} 个分片下载失败：{e}。已保存前面的分片",index+1))?;
+        let mut attempt = 0u32;
+        let size = loop {
+            attempt += 1;
+            emit_status(&app, &format!("正在下载第 {}/{} 片{}", index + 1,
+                snapshot.segments.len(), if attempt > 1 { "（重试中）" } else { "" }));
+            match atomic_hls_segment(&app, &record, remote, &path,
+                MAX_DOWNLOAD_BYTES.saturating_sub(completed), completed, completed_parts).await {
+                Ok(size) => break size,
+                Err(error) => {
+                    check_pause()?;
+                    // Do not retry authorization, missing-file or size-limit failures.
+                    let permanent = error.contains("HTTP 401") || error.contains("HTTP 403")
+                        || error.contains("HTTP 404") || error.contains("上限")
+                        || error.contains("超限") || error.contains("禁止访问");
+                    if attempt >= 3 || permanent {
+                        return Err(format!("第 {} 个分片下载失败：{error}。已保存前面的分片，可从「离线」继续", index + 1));
+                    }
+                    emit_progress(&app, &record, completed, None,
+                        Some(completed_parts), record.total_parts);
+                    tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
+                }
+            }
+        };
         completed += size;
         completed_parts += 1;
         emit_progress(&app,&record,completed,None,Some(completed_parts),record.total_parts);
