@@ -318,3 +318,42 @@ try:
         for match in list(re.finditer(re.escape(term),bundle))[:3]:
             print("INUYASHA_JS_CALL",repr(bundle[max(0,match.start()-700):match.end()+500]),flush=True)
 except Exception as e:print("INUYASHA_JS_ERROR",type(e).__name__,str(e)[:120],flush=True)
+
+
+# Ikanbot public-page capability probe: metadata only, no streaming content.
+print("==== IKANBOT PUBLIC PLAY PAGE",flush=True)
+for site in ["https://www1.ikanbot.com/play/442095","https://www1.ikanbot.com/"]:
+ try:
+  request=urllib.request.Request(site,headers=HEADERS)
+  with urllib.request.urlopen(request,timeout=15) as response:
+   raw=response.read(850000).decode("utf-8","replace")
+   final=response.url
+   status=response.status
+   typ=response.headers.get("Content-Type","")
+  parser=Inspect()
+  parser.feed(raw)
+  print("IKANBOT_PAGE",json.dumps({"url":site,"status":status,"final_host":urlparse(final).hostname,
+   "final_path":urlparse(final).path,"type":typ,"size":len(raw),
+   "title":"".join(parser.title)[:130],
+   "scripts":[urlparse(urljoin(final,s)).path[-130:] for s in parser.scripts[:30]],
+   "iframe_hosts":[urlparse(urljoin(final,s)).hostname for s in parser.frames][:15],
+   "links":len(parser.links),
+   "video_tags":len(parser.videos),
+   "play_links":list(dict.fromkeys(urlparse(urljoin(final,s)).path for s,_ in parser.links if "/play/" in s))[:14],
+   "markers":{k:(k.lower() in raw.lower()) for k in ["m3u8","video","episode","player","iframe","__NEXT_DATA__","__NUXT__","axios","api/","playUrl","sources"]},
+   "media_url_patterns":len(re.findall(r"\.m3u8|\.mp4",raw,re.I))},ensure_ascii=False),flush=True)
+  for js in parser.scripts[:12]:
+   target=urljoin(final,js)
+   uri=urlparse(target)
+   if uri.scheme!="https" or not uri.hostname or not (uri.hostname=="www1.ikanbot.com" or uri.hostname.endswith(".ikanbot.com")):continue
+   if not uri.path.endswith(".js"):continue
+   try:
+    with urllib.request.urlopen(urllib.request.Request(target,headers=HEADERS),timeout=10) as jr:
+     body=jr.read(600000).decode("utf-8","replace")
+    print("IKANBOT_JS",json.dumps({"file":uri.path[-130:],"size":len(body),
+     "markers":{k:(k.lower() in body.lower()) for k in ["m3u8","playUrl","playlist","episode","/api/","axios","videojs","hls.js","player","movie"]},
+     "endpoint_shapes":list(dict.fromkeys(re.findall(r'/(?:api|play|video|search|movie)/[A-Za-z0-9_/?=&.-]{2,95}',body)))[:20]},ensure_ascii=False),flush=True)
+   except Exception as e:
+    print("IKANBOT_JS_ERROR",uri.path[-60:],type(e).__name__,str(e)[:100],flush=True)
+ except Exception as e:
+  print("IKANBOT_ERROR",site,type(e).__name__,str(e)[:180],flush=True)
