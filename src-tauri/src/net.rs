@@ -60,6 +60,18 @@ pub async fn get(
     accept: Option<&str>,
     referer: Option<&str>,
 ) -> Result<reqwest::Response, String> {
+    get_with_range(url, timeout, accept, referer, None, None).await
+}
+
+/// Redirect-safe ranged GET for resumable media.
+pub async fn get_with_range(
+    url: &str,
+    timeout: Duration,
+    accept: Option<&str>,
+    referer: Option<&str>,
+    range: Option<&str>,
+    if_range: Option<&str>,
+) -> Result<reqwest::Response, String> {
     if !network_policy::strict_security() {
         return Err("MyVideo 需要严格安全模式".into());
     }
@@ -73,6 +85,9 @@ pub async fn get(
             let mut request = client.get(target.clone()).timeout(timeout);
             if let Some(value) = accept { request = request.header("Accept", value); }
             if let Some(value) = referer { request = request.header("Referer", value); }
+            if range.is_some() { request = request.header("Accept-Encoding", "identity"); }
+            if let Some(value) = range { request = request.header("Range", value); }
+            if let Some(value) = if_range { request = request.header("If-Range", value); }
             let response = request.send().await.map_err(|e| e.to_string())?;
             if !response.status().is_redirection() { return Ok(response); }
             if hop >= 5 { return Err("重定向次数过多".into()); }
