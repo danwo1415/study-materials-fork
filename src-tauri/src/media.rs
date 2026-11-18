@@ -67,8 +67,7 @@ fn rewrite_playlist(base: &str, contents: &str, prefix: &str) -> Result<String, 
             continue;
         }
         if line.starts_with("#EXT-X-DATERANGE:") {
-            // DATERANGE may advertise ad metadata; no remote resource calls.
-            output.push_str("#EXT-X-DISCONTINUITY-SEQUENCE:0\n");
+            // Metadata can embed remote URLs; omit it without altering timestamps.
             continue;
         }
         if line.is_empty() { output.push('\n'); continue; }
