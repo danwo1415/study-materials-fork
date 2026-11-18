@@ -533,7 +533,7 @@ function kubbMediaKey(url: string): string {
   if (!mediaKey) throw new Error("Kubb 播放地址缺少作品标识");
   return mediaKey;
 }
-async function kubbGet(endpoint: "GetTitleGetData" | "VideoDetails" | "getPlayData", params: Record<string,string>): Promise<KubbRecord> {
+async function kubbGet(endpoint: "GetTitleGetData" | "VideoDetails" | "VideoChooseGather" | "getPlayData", params: Record<string,string>): Promise<KubbRecord> {
   const path = endpoint === "GetTitleGetData" ? "/api/List/GetTitleGetData"
     : "/api/Video/" + endpoint;
   const target = new URL("https://api.kubb.tv" + path);
@@ -583,20 +583,21 @@ export async function fetchKubbDetail(url: string): Promise<{ title: string; epi
   const mediaKey = kubbMediaKey(url);
   const [details, tracks] = await Promise.all([
     kubbGet("VideoDetails", { mediaKey }),
-    kubbGet("getPlayData", { mediaKey }),
+    kubbGet("VideoChooseGather", { mediaKey }),
   ]);
   const detail = kubbObject(details.detailInfo);
   const title = kubbText(detail?.title) || "Kubb 视频";
   const episodes: HubEpisode[] = [];
   const seen = new Set<string>();
   for (const item of kubbEpisodes(tracks.list)) {
-    const link = playableKubbLink(item);
     const episodeKey = kubbText(item.episodeKey);
-    if (!link || !/^[A-Za-z0-9_-]{6,50}$/.test(episodeKey) || seen.has(episodeKey)) continue;
+    // Directory results legitimately omit mediaUrl. Fetch actual playback URL only on selection.
+    if (item.isVip === true || item.isLimit === true ||
+        !/^[A-Za-z0-9_-]{6,50}$/.test(episodeKey) || seen.has(episodeKey)) continue;
     const variantKey = kubbText(item.mediaKey) || mediaKey;
     if (!/^[A-Za-z0-9_-]{6,50}$/.test(variantKey)) continue;
-    const label = kubbText(item.episodeTitle) || kubbText(item.title) ||
-      kubbText(item.resolutionDes) || "免费线路";
+    const label = kubbText(item.episodeTitle) || kubbText(item.resolutionDes) ||
+      kubbText(item.title) || "免费线路";
     episodes.push({
       title: label,
       url: "https://m.kubb.tv/play/" + variantKey + "?id=" + encodeURIComponent(episodeKey),
