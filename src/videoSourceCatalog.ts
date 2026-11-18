@@ -16,4 +16,12 @@ export const videoSourceCandidates: readonly VideoSourceCandidate[] = [
     category: "anime",
     integrationStatus: "verified",
   },
+  {
+    id: "kubb",
+    name: "Kubb TV 酷播",
+    homepage: "https://m.kubb.tv/",
+    exampleUrl: "https://m.kubb.tv/play/qVyzCcnhWtG",
+    category: "film-tv",
+    integrationStatus: "verified",
+  },
 ];
