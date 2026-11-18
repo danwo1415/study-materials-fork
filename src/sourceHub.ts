@@ -33,6 +33,18 @@ export type HubDownload = {
   contentType: string;
 };
 
+export type HubPendingDownload = {
+  id: string;
+  key: string;
+  title: string;
+  sourceUrl: string;
+  kind: "hls" | "mp4" | "webm";
+  received: number;
+  total: number | null;
+  completedParts: number | null;
+  totalParts: number | null;
+};
+
 const KEY = "myvideo-multi-sources-v1";
 
 /**
@@ -364,10 +376,14 @@ export function findAllowedSiteEmbeds(html: string, pageUrl: string): HubMedia[]
 }
 
 export const listHubDownloads = () => invoke<HubDownload[]>("hub_list_downloads");
-export const downloadHubMedia = (url: string, title: string) =>
-  invoke<HubDownload>("hub_download_media", { url, title });
-export const downloadHubHls = (url: string, title: string) =>
-  invoke<HubDownload>("hub_download_hls", { url, title });
+export const listHubPending = () => invoke<HubPendingDownload[]>("hub_list_pending_downloads");
+export const pauseHubDownload = () => invoke<void>("hub_pause_download");
+export const discardHubPending = (id: string) =>
+  invoke<void>("hub_discard_pending_download", { id });
+export const downloadHubMedia = (url: string, title: string, key: string) =>
+  invoke<HubDownload>("hub_download_media", { url, title, key });
+export const downloadHubHls = (url: string, title: string, key: string) =>
+  invoke<HubDownload>("hub_download_hls", { url, title, key });
 export const deleteHubDownload = (id: string) => invoke<void>("hub_remove_download", { id });
 
 
