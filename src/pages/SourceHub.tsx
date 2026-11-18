@@ -8,6 +8,7 @@ import {
   makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
   fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, validateSource, listHubDownloads,
   downloadHubMedia, downloadHubHls, deleteHubDownload,
+  NNY_CATEGORIES, fetchNnyCatalog, type NnyCategory, type NnySort, type NnyGenre,
 } from "../sourceHub";
 
 type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: string };
@@ -146,7 +147,15 @@ export default function SourceHub() {
   const [downloads, setDownloads] = useState<HubDownload[]>([]);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState("");
-  const [view, setView] = useState<"search" | "sites" | "downloads">("search");
+  const [view, setView] = useState<"categories" | "search" | "sites" | "downloads">("categories");
+  const [category, setCategory] = useState<NnyCategory>("dongman");
+  const [sort, setSort] = useState<NnySort>("latest");
+  const [genre, setGenre] = useState("");
+  const [genres, setGenres] = useState<NnyGenre[]>([]);
+  const [catalogItems, setCatalogItems] = useState<HubResult[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const catalogRequest = useRef(0);
   const searchCounter = useRef(0);
   const hubRoot = useRef<HTMLDivElement>(null);
 
@@ -166,6 +175,26 @@ export default function SourceHub() {
     }).then((fn) => { unlisten = fn; });
     return () => unlisten?.();
   }, []);
+
+  const loadCatalog = async (cat: NnyCategory, order: NnySort, filter: string) => {
+    const req = ++catalogRequest.current;
+    setCatalogLoading(true);
+    setCatalogError("");
+    try {
+      const result = await fetchNnyCatalog(cat, order, filter || undefined);
+      if (req !== catalogRequest.current) return;
+      setCatalogItems(result.results);
+      if (!filter) setGenres(result.genres);
+      if (!result.results.length) setCatalogError("该分类没有解析到作品。可刷新重试，或使用搜索功能。");
+    } catch (error) {
+      if (req === catalogRequest.current) {
+        setCatalogItems([]);
+        setCatalogError("分类加载失败：" + (error as Error).message);
+      }
+    } finally { if (req === catalogRequest.current) setCatalogLoading(false); }
+  };
+
+  useEffect(() => { void loadCatalog(category, sort, genre); }, [category, sort, genre]);
 
   const updateSource = (id: string, patch: Partial<HubSource>) =>
     setSources((prev) => prev.map((s) => s.id === id ? { ...s, ...patch } : s));
@@ -293,11 +322,46 @@ export default function SourceHub() {
   const btn = "px-3 py-2 rounded-(--r-ctl) bg-s3 text-on text-[12px] pressable";
   const field = "w-full min-w-0 p-2.5 rounded-(--r-sm) bg-s3 text-on text-[12px] outline-none border border-white/10";
   return <div ref={hubRoot} className="flex flex-col gap-3 text-on">
-    <div className="flex gap-2">
+    <div className="flex gap-2 flex-wrap">
+      <button className={btn + (view === "categories" ? " bg-primary text-on-primary" : "")} onClick={() => setView("categories")}>分类</button>
       <button className={btn + (view === "search" ? " bg-primary text-on-primary" : "")} onClick={() => setView("search")}>聚合搜索</button>
       <button className={btn + (view === "sites" ? " bg-primary text-on-primary" : "")} onClick={() => setView("sites")}>管理网站</button>
       <button className={btn + (view === "downloads" ? " bg-primary text-on-primary" : "")} onClick={() => setView("downloads")}>离线 ({downloads.length})</button>
     </div>
+    {view === "categories" && <div className="space-y-3">
+      <div className="text-[13px] font-semibold">努努影院 · 分类浏览</div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {NNY_CATEGORIES.map((c) => <button key={c.id} type="button"
+          onClick={() => { setCategory(c.id); setGenre(""); setGenres([]); setCatalogItems([]); }}
+          className={btn + " shrink-0" + (category === c.id ? " bg-primary text-on-primary" : "")}>{c.label}</button>)}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={btn + (sort === "latest" ? " bg-primary text-on-primary" : "")}
+          onClick={() => setSort("latest")}>最近更新</button>
+        <button type="button" className={btn + (sort === "popular" ? " bg-primary text-on-primary" : "")}
+          onClick={() => setSort("popular")}>按人气</button>
+        <button type="button" className={btn} onClick={() => void loadCatalog(category, sort, genre)}>刷新</button>
+      </div>
+      {genres.length > 1 && <div className="flex gap-2 overflow-x-auto pb-1" aria-label="类型筛选">
+        {genres.map((g) => <button key={g.url} type="button" onClick={() => setGenre(g.label === "全部" ? "" : g.url)}
+          className={btn + " shrink-0" + ((genre === g.url || (!genre && g.label === "全部")) ? " bg-primary text-on-primary" : "")}>{g.label}</button>)}
+      </div>}
+      {catalogLoading && <p className="text-[12px] text-mut" role="status">正在加载真实分类作品…</p>}
+      {catalogError && <p className="text-[12px] text-mut" role="status">{catalogError}</p>}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {catalogItems.map((item) => <button type="button" key={item.id}
+          className="min-w-0 text-left rounded-(--r-md) bg-s2 overflow-hidden pressable"
+          onClick={() => { setView("search"); void openResult(item); }}>
+          <div className="aspect-[3/4] bg-s3 flex items-center justify-center overflow-hidden">
+            {item.poster ? <img src={LOCAL + "/seg?u=" + encodeURIComponent(item.poster)} alt="" loading="lazy"
+              className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+              : <span className="text-2xl text-mut">▶</span>}
+          </div>
+          <div className="px-2 py-2 text-[12px] font-medium break-words line-clamp-2 min-h-11">{item.title}</div>
+        </button>)}
+      </div>
+      <div className="text-[11px] text-mut">内容来自努努影院的公开分类页面。作品是否可播放仍以实际剧集线路为准。</div>
+    </div>}
     {view === "search" && <>
       {!selected && <>
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void searchAll(query); }}>
