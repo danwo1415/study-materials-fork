@@ -426,6 +426,193 @@ pub async fn serve_hls_offline(
         .body(contents).unwrap()
 }
 
+
+// Public Ikanbot playback adapter. Reads the same anonymous public page data
+// its first-party player uses. No login credentials, key extraction, or DRM.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IkanbotEpisode {
+    title: String,
+    url: String,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IkanbotLine {
+    name: String,
+    episodes: Vec<IkanbotEpisode>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IkanbotCatalog {
+    title: String,
+    lines: Vec<IkanbotLine>,
+}
+
+fn ikanbot_input<'a>(html: &'a str, field: &str) -> Option<&'a str> {
+    let needle = format!("id=\"{field}\"");
+    for fragment in html.split("<input").skip(1) {
+        let tag = fragment.split_once('>')?.0;
+        if !tag.contains(&needle) { continue; }
+        let value = tag.split_once("value=\"")?.1;
+        return Some(value.split_once('"')?.0);
+    }
+    None
+}
+
+fn ikanbot_page_token(id: &str, encrypted: &str) -> Result<String, String> {
+    if !id.is_ascii() || id.len() < 4 || !id.bytes().all(|b| b.is_ascii_digit()) ||
+       !encrypted.is_ascii() || encrypted.len() < 40 {
+        return Err("爱看机器人公开页面缺少有效播放字段".into());
+    }
+    // Mirrors the anonymous page's own get_tks() operation on its hidden fields.
+    let mut rest = encrypted;
+    let mut token = String::new();
+    for digit in id[id.len() - 4..].bytes() {
+        let skip = usize::from((digit - b'0') % 3 + 1);
+        if rest.len() < skip + 8 {
+            return Err("爱看机器人网页播放字段发生变化".into());
+        }
+        token.push_str(&rest[skip..skip + 8]);
+        rest = &rest[skip + 8..];
+    }
+    Ok(token)
+}
+
+async fn ikanbot_bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
+    if !response.status().is_success() {
+        return Err(format!("爱看机器人返回 HTTP {}", response.status()));
+    }
+    if response.content_length().is_some_and(|n| n > limit as u64) {
+        return Err("爱看机器人页面或选集数据过大".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if bytes.len() + chunk.len() > limit {
+            return Err("爱看机器人页面或选集数据超出安全大小限制".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+fn ikanbot_title(html: &str) -> String {
+    html.split("<h1 id=\"video_title\"").nth(1)
+        .and_then(|s| s.split_once('>'))
+        .and_then(|(_,s)| s.split_once('<'))
+        .map(|(s,_)| s.trim().chars().take(120).collect::<String>())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "爱看机器人视频".into())
+}
+
+#[tauri::command]
+pub async fn hub_ikanbot_catalog(url: String) -> Result<IkanbotCatalog, String> {
+    let target = public_target(&url)?;
+    if target.scheme() != "https" || target.host_str() != Some("www1.ikanbot.com") ||
+        !target.path().starts_with("/play/") ||
+        !target.path().trim_start_matches("/play/").bytes().all(|c| c.is_ascii_digit()) ||
+        target.path().trim_start_matches("/play/").is_empty() ||
+        target.query().is_some() || target.fragment().is_some() {
+        return Err("只支持 www1.ikanbot.com 的公开作品播放页面".into());
+    }
+    let html_response = crate::net::get(&url, Duration::from_secs(25), Some("text/html"), None).await?;
+    let html = String::from_utf8(ikanbot_bounded(html_response, 1_000_000).await?)
+        .map_err(|_| "爱看机器人网页编码无效")?;
+    let id = ikanbot_input(&html, "current_id").ok_or("页面没有作品编号")?;
+    if id != target.path().trim_start_matches("/play/") {
+        return Err("页面作品编号与地址不匹配".into());
+    }
+    let encrypted = ikanbot_input(&html, "e_token").ok_or("页面缺少播放字段")?;
+    let mtype = ikanbot_input(&html, "mtype").ok_or("页面缺少媒体类型")?;
+    if mtype.len() > 3 || !mtype.bytes().all(|c| c.is_ascii_digit()) {
+        return Err("网站媒体类型无效".into());
+    }
+    let token = ikanbot_page_token(id, encrypted)?;
+    let mut api = url::Url::parse("https://www1.ikanbot.com/api/getResN")
+        .map_err(|e| e.to_string())?;
+    api.query_pairs_mut().append_pair("videoId", id)
+        .append_pair("mtype", mtype).append_pair("token", &token);
+    let response = crate::net::get(api.as_str(), Duration::from_secs(30),
+        Some("application/json"), Some(&url)).await?;
+    let payload: serde_json::Value = serde_json::from_slice(
+        &ikanbot_bounded(response, 1_000_000).await?
+    ).map_err(|_| "网站播放接口没有返回有效 JSON")?;
+    if payload.get("state").and_then(|x| x.as_i64()) != Some(1) {
+        return Err("网站未开放当前播放线路；可在原网站检查播放状态".into());
+    }
+    let groups = payload.pointer("/data/list").and_then(|x| x.as_array())
+        .ok_or("网站没有返回线路列表")?;
+    let mut lines = Vec::new();
+    for group in groups.iter().take(32) {
+        let Some(raw) = group.get("resData").and_then(|v| v.as_str()) else { continue; };
+        let Ok(data) = serde_json::from_str::<serde_json::Value>(raw) else { continue; };
+        let Some(tracks) = data.as_array() else { continue; };
+        for track in tracks.iter().take(4) {
+            let Some(playlist) = track.get("url").and_then(|v| v.as_str()) else { continue; };
+            let name = track.get("flag").and_then(|v| v.as_str()).unwrap_or("线路");
+            let mut episodes = Vec::new();
+            for part in playlist.split('#').take(240) {
+                let Some((title, link)) = part.split_once('
+    use super::*;
+    #[test]
+    fn rejects_encryption_and_live_streams() {
+        let encrypted = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXTINF:4,\na.ts\n#EXT-X-ENDLIST\n";
+        assert!(hls_media_segments("https://example.org/list.m3u8", encrypted, "h1").is_err());
+        let clear = "#EXTM3U\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:4,\na.ts\n#EXT-X-ENDLIST\n";
+        assert!(hls_media_segments("https://example.org/list.m3u8", clear, "h1").is_ok());
+        let live = "#EXTM3U\n#EXTINF:4,\na.ts\n";
+        assert!(hls_media_segments("https://example.org/list.m3u8", live, "h1").is_err());
+    }
+    #[test]
+    fn rewrites_standard_ts_segments_to_private_offline_route() {
+        let media = "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:4.0,\nhttps://example.org/seg1.ts\n#EXTINF:4.0,\nseg2.ts\n#EXT-X-ENDLIST\n";
+        let result = hls_media_segments("https://example.org/list.m3u8", media, "h123").unwrap();
+        assert_eq!(result.segments.len(), 2);
+        assert!(result.playlist.contains("/offline-hls?id=h123&file=seg-00000.ts"));
+        assert!(result.playlist.contains("/offline-hls?id=h123&file=seg-00001.ts"));
+    }
+}
+) else { continue; };
+                let title = title.trim();
+                if title.is_empty() || title.len() > 80 || link.len() > 4000 { continue; }
+                let Ok(uri) = url::Url::parse(link.trim()) else { continue; };
+                if uri.scheme() != "https" ||
+                    !uri.path().to_ascii_lowercase().ends_with(".m3u8") ||
+                    crate::network_policy::parse_target_with_mode(uri.as_str(), true).is_err() {
+                    continue;
+                }
+                episodes.push(IkanbotEpisode {
+                    title: title.chars().take(50).collect(),
+                    url: uri.to_string(),
+                });
+            }
+            if !episodes.is_empty() {
+                lines.push(IkanbotLine {
+                    name: format!("线路 {} · {}", lines.len() + 1, name.chars().take(24).collect::<String>()),
+                    episodes,
+                });
+            }
+        }
+    }
+    if lines.is_empty() {
+        return Err("网站返回了播放数据，但没有找到可供原生播放器使用的 HTTPS HLS 线路".into());
+    }
+    Ok(IkanbotCatalog { title: ikanbot_title(&html), lines })
+}
+
+#[cfg(test)]
+mod ikanbot_tests {
+    use super::*;
+    #[test]
+    fn public_token_algorithm_and_input_extraction() {
+        let id = "442095";
+        let encrypted = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN";
+        assert_eq!(ikanbot_page_token(id, encrypted).unwrap().len(), 32);
+        let html = r#"<input type="hidden" id="current_id" value="442095"/><input id="e_token" value="abcdef"/>"#;
+        assert_eq!(ikanbot_input(html, "current_id"), Some("442095"));
+        assert_eq!(ikanbot_input(html, "e_token"), Some("abcdef"));
+    }
+}
+
 #[cfg(test)]
 mod hls_snapshot_tests {
     use super::*;
