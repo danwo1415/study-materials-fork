@@ -5,8 +5,8 @@ import { listen } from "@tauri-apps/api/event";
 const LOCAL = /Android|Windows/i.test(navigator.userAgent) ? "http://hg.localhost" : "hg://localhost";
 import {
   type HubDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
-  makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
-  fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, validateSource, listHubDownloads,
+  readHubSources, saveHubSources, searchPublicSite,
+  fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, listHubDownloads,
   downloadHubMedia, downloadHubHls, deleteHubDownload,
   NNY_CATEGORIES, fetchNnyCatalog, type NnyCategory, type NnySort, type NnyGenre,
 } from "../sourceHub";
@@ -131,8 +131,6 @@ function EmbeddedVideo({ media, adMarkerKey }: {
 
 export default function SourceHub() {
   const [sources, setSources] = useState<HubSource[]>(readHubSources);
-  const [newUrl, setNewUrl] = useState("");
-  const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState("all");
   const [results, setResults] = useState<HubResult[]>([]);
@@ -147,7 +145,7 @@ export default function SourceHub() {
   const [downloads, setDownloads] = useState<HubDownload[]>([]);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState("");
-  const [view, setView] = useState<"categories" | "search" | "sites" | "downloads">("categories");
+  const [view, setView] = useState<"categories" | "search" | "downloads">("categories");
   const [category, setCategory] = useState<NnyCategory>("dongman");
   const [sort, setSort] = useState<NnySort>("latest");
   const [genre, setGenre] = useState("");
@@ -198,27 +196,6 @@ export default function SourceHub() {
 
   const updateSource = (id: string, patch: Partial<HubSource>) =>
     setSources((prev) => prev.map((s) => s.id === id ? { ...s, ...patch } : s));
-
-  const addSite = async () => {
-    try {
-      const site = makeHubSource(newUrl);
-      if (sources.some((s) => new URL(s.homepage).hostname === new URL(site.homepage).hostname)) {
-        setMessage("该网站已在列表中，可直接编辑搜索规则");
-        return;
-      }
-      setSources((prev) => [...prev, site]);
-      setNewUrl("");
-      setAdding(false);
-      setMessage("已保存 " + site.name + "，正在尝试识别公开搜索表单…");
-      try {
-        const found = await discoverSearchTemplate(site);
-        if (found) {
-          updateSource(site.id, { searchTemplate: found, configured: true });
-          setMessage("已识别 " + site.name + " 的 GET 搜索表单，请实际测试搜索结果");
-        } else setMessage("已保存网站，但未识别到标准公开搜索表单；需要手动配置搜索规则或开发专用适配器");
-      } catch (e) { setMessage("网站已保存；自动检测失败：" + (e as Error).message); }
-    } catch (e) { setMessage((e as Error).message); }
-  };
 
   const searchAll = async (keyword: string) => {
     const k = keyword.trim();
@@ -325,7 +302,6 @@ export default function SourceHub() {
     <div className="flex gap-2 flex-wrap">
       <button className={btn + (view === "categories" ? " bg-primary text-on-primary" : "")} onClick={() => setView("categories")}>分类</button>
       <button className={btn + (view === "search" ? " bg-primary text-on-primary" : "")} onClick={() => setView("search")}>聚合搜索</button>
-      <button className={btn + (view === "sites" ? " bg-primary text-on-primary" : "")} onClick={() => setView("sites")}>管理网站</button>
       <button className={btn + (view === "downloads" ? " bg-primary text-on-primary" : "")} onClick={() => setView("downloads")}>离线 ({downloads.length})</button>
     </div>
     {view === "categories" && <div className="space-y-3">
@@ -424,45 +400,6 @@ export default function SourceHub() {
       </div>}
       {!selected && !searching && !results.length && query.trim() && Object.keys(statuses).length > 0 &&
         <p className="text-[12px] text-mut">未找到候选结果。可到「管理网站」中调整搜索规则，或使用原网站搜索。</p>}
-    </>}
-    {view === "sites" && <>
-      <button className={btn + " bg-primary text-on-primary self-start"} onClick={() => setAdding(!adding)}>
-        {adding ? "取消添加" : "＋ 添加视频网站"}
-      </button>
-      {adding && <div className="rounded-(--r-md) p-3 bg-s2 space-y-2">
-        <label className="text-[12px]">视频网站主页或作品网址</label>
-        <input className={field} placeholder="https://example.com/" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} />
-        <button className={btn} onClick={() => { void addSite(); }}>保存并自动识别</button>
-        <p className="text-[11px] text-mut">保存网址不会自动解析任意网站。保存后可设置网站的公开搜索地址模板。</p>
-      </div>}
-      {sources.map((s) => <div key={s.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
-        <div className="flex items-center gap-2 justify-between">
-          <div className="text-[13px] font-semibold break-all">{s.name}</div>
-          <label className="flex items-center gap-1 text-[11px] text-mut">
-            <input type="checkbox" checked={s.enabled} onChange={(e) => updateSource(s.id, { enabled: e.target.checked })} />启用
-          </label>
-        </div>
-        <div className="text-[11px] text-mut break-all">{s.homepage}</div>
-        <label className="block text-[11px]">搜索 URL 模板（用 {"{query}"} 表示关键词）</label>
-        <input className={field} value={s.searchTemplate} onChange={(e) =>
-          updateSource(s.id, { searchTemplate: e.target.value, configured: false })} />
-        <div className="flex gap-2 items-center justify-between">
-          <button className={btn} onClick={async () => {
-            try {
-              const found = await discoverSearchTemplate(s);
-              if (found) { updateSource(s.id, { searchTemplate: found, configured: true }); setMessage("已识别公开搜索表单，可尝试搜索"); }
-              else setMessage("无法自动识别搜索表单，请手动配置或制作专用适配器");
-            } catch (e) { setMessage((e as Error).message); }
-          }}>自动识别</button>
-          <button className={btn} onClick={() => {
-            try { validateSource(s); updateSource(s.id, { configured: true }); setMessage(s.name + " 规则格式有效；实际搜索仍需测试"); }
-            catch (e) { setMessage((e as Error).message); }
-          }}>检查规则</button>
-          {s.id.startsWith("custom-") && <button className={btn} onClick={() =>
-            setSources((prev) => prev.filter((x) => x.id !== s.id))}>删除</button>}
-        </div>
-        <div className="text-[10px] text-mut">{s.configured ? "规则格式已检查（未验证站点兼容性）" : "待验证搜索规则"}</div>
-      </div>)}
     </>}
     {view === "downloads" && <div className="space-y-2">
       <div className="text-[12px] text-mut">MP4、WebM 与普通 HLS 均保存在 MyVideo 私有目录。卸载 MyVideo 可能删除这些文件。</div>
