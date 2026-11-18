@@ -445,3 +445,26 @@ for mtype in ["1","0","2"]:
     print("IKANBOT_GETRES_HTTP_ERROR",json.dumps({"mtype":mtype,"status":e.code},ensure_ascii=False),flush=True)
   except Exception as e:
     print("IKANBOT_GETRES_ERROR",json.dumps({"mtype":mtype,"error":type(e).__name__,"desc":str(e)[:100]},ensure_ascii=False),flush=True)
+
+
+print("==== IKANBOT ACTUAL MTYPE AND SEARCH",flush=True)
+for params in [
+ {"videoId":"442095","mtype":"18","token":""},
+ {"videoId":"442095","mtype":"18"},
+]:
+ try:
+  req=urllib.request.Request("https://www1.ikanbot.com/api/getResN?"+urlencode(params),headers={**HEADERS,"Accept":"application/json","Referer":"https://www1.ikanbot.com/play/442095"})
+  with urllib.request.urlopen(req,timeout=12) as resp:
+   raw=resp.read(200000)
+   code=resp.status
+  obj=json.loads(raw)
+  print("IKANBOT_ACTUAL_MTYPE",json.dumps({"http":code,"params":params,"state":obj.get("state"),"data_type":type(obj.get("data")).__name__,"data_length":len(obj.get("data")) if isinstance(obj.get("data"),(dict,list)) else None},ensure_ascii=False),flush=True)
+ except Exception as e:print("IKANBOT_ACTUAL_MTYPE_ERROR",type(e).__name__,str(e)[:100],flush=True)
+try:
+ req=urllib.request.Request("https://www1.ikanbot.com/search?q="+urlencode({"":"犬夜叉"}).split("=",1)[1],headers=HEADERS)
+ with urllib.request.urlopen(req,timeout=12) as resp:
+  body=resp.read(250000).decode("utf-8","replace")
+  p=Inspect();p.feed(body)
+  matches=list(dict.fromkeys(urlparse(urljoin(resp.url,h)).path for h,_ in p.links if "/play/" in h))
+  print("IKANBOT_SEARCH_CHECK",json.dumps({"status":resp.status,"title":"".join(p.title)[:100],"play_links":len(matches),"target_present":"/play/442095" in matches,"samples":matches[:10]},ensure_ascii=False),flush=True)
+except Exception as e:print("IKANBOT_SEARCH_CHECK_ERROR",type(e).__name__,str(e)[:100],flush=True)
