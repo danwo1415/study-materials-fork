@@ -482,3 +482,17 @@ try:
   near=re.sub(r'(window\.v_tks\s*=\s*)[^;]+',r'\1"[redacted]"',near)
   print("IKANBOT_TOKEN_FUNCTION",repr(near[:3800]),flush=True)
 except Exception as e:print("IKANBOT_TOKEN_SCRIPT_ERROR",type(e).__name__,str(e)[:140],flush=True)
+
+
+print("==== IKANBOT PUBLIC TOKEN INPUTS (NO SECRETS)",flush=True)
+try:
+ with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/play/442095",headers=HEADERS),timeout=12) as resp:
+  html=resp.read(190000).decode("utf-8","replace")
+ for m in re.finditer(r"<input\b[^>]*>",html,re.I):
+  tag=m.group(0);attrs=dict(re.findall(r'([\w-]+)\s*=\s*["\x27]([^"\x27]*)["\x27]',tag))
+  if attrs.get("type") == "hidden":
+   val=attrs.get("value","")
+   print("IKANBOT_INPUT",json.dumps({"id":attrs.get("id"),"name":attrs.get("name"),"length":len(val),"tail_is_digits":val[-4:].isdigit(),"looks_hex":bool(re.fullmatch("[0-9a-fA-F]+",val))},ensure_ascii=False),flush=True)
+ for m in list(re.finditer(r'id="e_token"|get_tks|mtype|videoId',html,re.I))[:8]:
+  print("IKANBOT_PAGE_ATTR_CONTEXT",repr(re.sub(r'value="[^"]{20,}"','value="[redacted]"',html[max(0,m.start()-100):m.end()+120])[:260]),flush=True)
+except Exception as e:print("IKANBOT_INPUT_ERROR",type(e).__name__,str(e)[:140],flush=True)
