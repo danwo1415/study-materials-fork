@@ -93,3 +93,41 @@ try:
                 print("SEARCH_ROUTE_CONTEXT",repr(data[max(0,match.start()-280):match.end()+320]))
 except Exception as e:
     print("ADAPTER_BUNDLE_ERROR",type(e).__name__,str(e)[:200])
+
+# Public API availability and lazily loaded search / video page adapter metadata.
+from urllib.parse import urlencode
+def summarize_response(value, depth=0):
+    if depth > 3: return type(value).__name__
+    if isinstance(value,dict): return {k:summarize_response(v, depth+1) for k,v in list(value.items())[:20]}
+    if isinstance(value,list): return {"list_len":len(value),"first":summarize_response(value[0],depth+1) if value else None}
+    if isinstance(value,str): return {"string_len":len(value),"sample": value[:80] if len(value)<80 and "://" not in value else "[redacted]"}
+    return value
+
+for filename in ["chunk-18913acc.1791277306588.js","chunk-cc6e1d50.1791277306588.js",
+                 "chunk-2fcb4b44.1791277306588.js","chunk-80737fe6.1791277306588.js"]:
+    try:
+        req=urllib.request.Request("https://m.kubb.tv/script/"+filename,headers=HEADERS)
+        with urllib.request.urlopen(req,timeout=12) as resp: data=resp.read(1600000).decode("utf-8","replace")
+        print("KUBB_LAZY_CHUNK",filename,"bytes",len(data),flush=True)
+        paths=list(dict.fromkeys(re.findall(r'url:"(/api/[^"]{2,90})"',data,re.I)))
+        print("KUBB_LAZY_ENDPOINTS",json.dumps(paths[:75],ensure_ascii=False),flush=True)
+        for term in ["search", "keywords", "keyword", "mediaKey", "VideoDetails", "getPlayData","episodeKey","GetPlayAddress"]:
+            matches=list(re.finditer(re.escape(term),data,re.I))
+            print("KUBB_LAZY_TERM",term,len(matches),flush=True)
+            for m in matches[:2]:print("KUBB_LAZY_CTX",repr(data[max(0,m.start()-150):m.end()+240]),flush=True)
+    except Exception as e:print("KUBB_LAZY_ERROR",filename,type(e).__name__,str(e)[:120],flush=True)
+
+for endpoint,params in [
+    ("/api/Video/VideoDetails",{"mediaKey":"qVyzCcnhWtG"}),
+    ("/api/Video/VideoChooseGather",{"mediaKey":"qVyzCcnhWtG"}),
+    ("/api/Video/getPlayData",{"mediaKey":"qVyzCcnhWtG"}),
+    ("/api/video/GetPlayAddress",{"mediaKey":"qVyzCcnhWtG"}),
+]:
+    url="https://m.kubb.tv"+endpoint+"?"+urlencode(params)
+    try:
+        req=urllib.request.Request(url,headers={**HEADERS, "Accept":"application/json","Referer":"https://m.kubb.tv/"})
+        with urllib.request.urlopen(req,timeout=10) as resp:
+            raw=resp.read(18000).decode("utf-8","replace")
+            kind=resp.headers.get("Content-Type")
+        print("KUBB_GET_API",endpoint,"status",resp.status,"type",kind,"data",repr(summarize_response(json.loads(raw)))[:2500],flush=True)
+    except Exception as e: print("KUBB_GET_ERROR",endpoint,type(e).__name__,str(e)[:150],flush=True)
