@@ -147,3 +147,23 @@ for filename, terms in [
       for match in matches[:3]:
         print("ROUTE_CTX",repr(content[max(0,match.start()-1600):min(len(content),match.end()+550)]),flush=True)
   except Exception as e:print("ROUTE_ERROR",str(e)[:120],flush=True)
+
+# Kubb's own frontend maps relative /api/* requests to https://api.kubb.tv.
+# Probe anonymous GET only; do not emulate signed tokens or request protected media.
+for endpoint, params in [
+  ("/api/Video/VideoDetails", {"mediaKey":"qVyzCcnhWtG"}),
+  ("/api/Video/VideoChooseGather",{"mediaKey":"qVyzCcnhWtG"}),
+  ("/api/Video/getPlayData",{"mediaKey":"qVyzCcnhWtG"}),
+  ("/api/List/GetTitleGetData",{"keyWord":"犬夜叉","page":1}),
+  ("/api/Home/GetKeyWord",{"keyWord":"犬夜叉"})
+]:
+    url = "https://api.kubb.tv"+endpoint+"?"+urlencode(params)
+    try:
+        req=urllib.request.Request(url,headers={**HEADERS,"Accept":"application/json","Referer":"https://m.kubb.tv/","Origin":"https://m.kubb.tv"})
+        with urllib.request.urlopen(req,timeout=12) as resp:
+            raw=resp.read(40000).decode("utf-8","replace")
+            typ=resp.headers.get("Content-Type")
+        try: result=summarize_response(json.loads(raw))
+        except json.JSONDecodeError: result={"content_sample":raw[:130]}
+        print("KUBB_REAL_API",endpoint,"status",resp.status,"type",typ,"shape",repr(result)[:3500],flush=True)
+    except Exception as e: print("KUBB_REAL_API_ERROR",endpoint,type(e).__name__,str(e)[:160],flush=True)
