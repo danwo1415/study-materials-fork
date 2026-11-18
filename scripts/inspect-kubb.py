@@ -49,8 +49,8 @@ for source in SITES:
               "bundled_data_markers":[x for x in ("__NEXT_DATA__", "__NUXT__", "__INITIAL_STATE__", "window.__", "m3u8", "playData", "player_", "Hls", "videoplayer", "search") if x in body],
               "public_media_matches":len(re.findall(r"\\.m3u8|\\.mp4",body,re.I))
               },ensure_ascii=False))
-            if "/play/" in source:
-                for js in scripts[-8:]:
+            if source.endswith("/") or "/play/" in source:
+                for js in scripts[-6:]:
                     try:
                         parsed = urlparse(js)
                         if not parsed.scheme == "https" or not parsed.hostname or not parsed.hostname.endswith("kubb.tv"): continue
@@ -58,7 +58,8 @@ for source in SITES:
                             data = jresp.read(450000).decode("utf-8","replace")
                         api_paths = list(dict.fromkeys(re.findall(r"[/][a-zA-Z0-9_/-]*(?:search|play|video|media|episode|source|stream)[a-zA-Z0-9_/?=&.-]*",data,re.I)))
                         print("public_script",json.dumps({"path":parsed.path[-100:],"bytes_sampled":len(data),"api_path_shapes":[p[:130] for p in api_paths[:20]],
-                          "uses_hls":"m3u8" in data.lower(),"uses_drm":any(x in data.lower() for x in ("widevine","licenseurl","eme"))},ensure_ascii=False))
+                          "uses_hls":"m3u8" in data.lower(),"uses_drm":any(x in data.lower() for x in ("widevine","licenseurl","eme")),
+                          "api_prefixes":[x[:85] for x in list(dict.fromkeys(re.findall(r"/(?:api|search|play|video|media)/[a-zA-Z0-9_?=&./-]{1,80}", data)))[:20]]},ensure_ascii=False))
                     except Exception as e:
                         print("public_script_error",type(e).__name__,str(e)[:100])
     except Exception as e:
