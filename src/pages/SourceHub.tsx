@@ -168,13 +168,21 @@ export default function SourceHub() {
   useEffect(() => {
     void listHubDownloads().then(setDownloads).catch(() => {});
     void listHubPending().then(setPending).catch(() => {});
-    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    const unlisteners: Array<() => void> = [];
+    const register = (fn: () => void) => {
+      if (mounted) unlisteners.push(fn);
+      else fn();
+    };
     void listen<{ received: number; total: number | null; completedParts?: number; totalParts?: number }>("hub-download-progress", (event) => {
       const { received, total, completedParts, totalParts } = event.payload;
       setDownloadProgress(total ? Math.round(received / total * 100) + "%"
-        : (completedParts && totalParts ? completedParts + "/" + totalParts + " 片 · " : "") + (received / 1048576).toFixed(1) + " MB");
-    }).then((fn) => { unlisten = fn; });
-    return () => unlisten?.();
+        : (totalParts ? (completedParts || 0) + "/" + totalParts + " 片 · " : "") + (received / 1048576).toFixed(1) + " MB");
+    }).then(register).catch(() => {});
+    void listen<string>("hub-download-status", (event) => {
+      setDownloadProgress(event.payload);
+    }).then(register).catch(() => {});
+    return () => { mounted = false; unlisteners.forEach((fn) => fn()); };
   }, []);
 
   const loadCatalog = async (cat: NnyCategory, order: NnySort, filter: string) => {
