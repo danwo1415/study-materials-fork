@@ -551,7 +551,50 @@ pub async fn hub_ikanbot_catalog(url: String) -> Result<IkanbotCatalog, String> 
             let name = track.get("flag").and_then(|v| v.as_str()).unwrap_or("线路");
             let mut episodes = Vec::new();
             for part in playlist.split('#').take(240) {
-                let Some((title, link)) = part.split_once('
+                let Some((title, link)) = part.split_once(char::from(36u8)) else { continue; };
+                let title = title.trim();
+                if title.is_empty() || title.len() > 80 || link.len() > 4000 { continue; }
+                let Ok(uri) = url::Url::parse(link.trim()) else { continue; };
+                if uri.scheme() != "https" ||
+                    !uri.path().to_ascii_lowercase().ends_with(".m3u8") ||
+                    crate::network_policy::parse_target_with_mode(uri.as_str(), true).is_err() {
+                    continue;
+                }
+                episodes.push(IkanbotEpisode {
+                    title: title.chars().take(50).collect(),
+                    url: uri.to_string(),
+                });
+            }
+            if !episodes.is_empty() {
+                lines.push(IkanbotLine {
+                    name: format!("线路 {} · {}", lines.len() + 1, name.chars().take(24).collect::<String>()),
+                    episodes,
+                });
+            }
+        }
+    }
+    if lines.is_empty() {
+        return Err("网站返回了播放数据，但没有找到可供原生播放器使用的 HTTPS HLS 线路".into());
+    }
+    Ok(IkanbotCatalog { title: ikanbot_title(&html), lines })
+}
+
+#[cfg(test)]
+mod ikanbot_tests {
+    use super::*;
+    #[test]
+    fn public_token_algorithm_and_input_extraction() {
+        let id = "442095";
+        let encrypted = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN";
+        assert_eq!(ikanbot_page_token(id, encrypted).unwrap().len(), 32);
+        let html = r#"<input type="hidden" id="current_id" value="442095"/><input id="e_token" value="abcdef"/>"#;
+        assert_eq!(ikanbot_input(html, "current_id"), Some("442095"));
+        assert_eq!(ikanbot_input(html, "e_token"), Some("abcdef"));
+    }
+}
+
+#[cfg(test)]
+mod hls_snapshot_tests {
     use super::*;
     #[test]
     fn rejects_encryption_and_live_streams() {
