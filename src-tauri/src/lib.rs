@@ -67,6 +67,9 @@ pub fn run() {
             source_hub::hub_download_hls,
             source_hub::hub_list_downloads,
             source_hub::hub_remove_download,
+            source_hub::hub_list_pending_downloads,
+            source_hub::hub_discard_pending_download,
+            source_hub::hub_pause_download,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MyVideo");
