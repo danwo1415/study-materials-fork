@@ -613,12 +613,14 @@ export async function fetchKubbEpisode(episodeUrl: string): Promise<HubMedia[]> 
   if (!/^[A-Za-z0-9_-]{6,50}$/.test(episodeKey)) {
     throw new Error("Kubb 选集缺少有效 episodeKey");
   }
-  const data = await kubbGet("getPlayData", { mediaKey });
+  // Kubb defaults to the LAST episode unless episodeKey is sent explicitly.
+  // Verified against its public API: episodeKey=01 resolves 01, not 166-167.
+  const data = await kubbGet("getPlayData", { mediaKey, episodeKey });
   for (const item of kubbEpisodes(data.list)) {
     if (kubbText(item.episodeKey) !== episodeKey) continue;
     const link = playableKubbLink(item);
-    if (!link) throw new Error("这条线路需要 VIP 权限或未提供公开播放地址");
+    if (!link) throw new Error("该剧集没有公开可下载的播放地址，可能需要 VIP 权限");
     return [link];
   }
-  throw new Error("Kubb 公开接口中没有找到对应选集");
+  throw new Error("Kubb 未返回所选剧集的播放线路，请重新选择");
 }
