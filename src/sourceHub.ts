@@ -25,6 +25,11 @@ export type HubMedia = {
   type: "mp4" | "webm" | "hls" | "embed";
 };
 
+export type IkanbotLine = { name: string; episodes: HubEpisode[] };
+export type IkanbotCatalog = { title: string; lines: IkanbotLine[] };
+export const fetchIkanbotCatalog = (url: string) =>
+  invoke<IkanbotCatalog>("hub_ikanbot_catalog", { url });
+
 export type HubDownload = {
   id: string;
   title: string;
@@ -33,7 +38,19 @@ export type HubDownload = {
   contentType: string;
 };
 
-const KEY = "hghub-multi-sources-v2";
+export type HubPendingDownload = {
+  id: string;
+  key: string;
+  title: string;
+  sourceUrl: string;
+  kind: "hls" | "mp4" | "webm";
+  received: number;
+  total: number | null;
+  completedParts: number | null;
+  totalParts: number | null;
+};
+
+const KEY = "myvideo-multi-sources-v1";
 
 /**
  * Sites that do not satisfy the required trio (search + in-app playback +
@@ -42,31 +59,22 @@ const KEY = "hghub-multi-sources-v2";
  * Filter persisted V2 configs too, otherwise existing installations keep it.
  */
 export function isExcludedHubSource(source: Pick<HubSource, "id" | "homepage">): boolean {
-  if (source.id === "ikanbot") return true;
-  try {
-    const host = new URL(source.homepage).hostname.toLowerCase();
-    return host === "ikanbot.com" || host.endsWith(".ikanbot.com");
-  } catch {
-    return false;
-  }
+  // Ikanbot is separately labeled playback beta; offline downloads stay disabled.
+  // Keep unsupported old sources hidden.
+  return source.id !== "nnyy" && source.id !== "kubb" && source.id !== "ikanbot";
 }
 
-const defaultSites: HubSource[] = videoSourceCandidates.filter((s) => !isExcludedHubSource(s)).map((s) => ({
+const defaultSites: HubSource[] = videoSourceCandidates.map((s) => ({
   id: s.id,
   name: s.name,
   homepage: s.homepage,
-  // These templates are hypotheses for user testing, not validated site endpoints.
-  searchTemplate: s.id === "ikanbot"
+  searchTemplate: s.id === "kubb"
+    ? "https://api.kubb.tv/api/List/GetTitleGetData?SearchCriteria={query}"
+    : s.id === "ikanbot"
     ? "https://www1.ikanbot.com/search?q={query}"
-    : s.id === "bandai-channel"
-      ? "https://www.b-ch.com/search/?search_txt={query}"
-      : s.id === "dm84"
-        ? "https://dm84.tv/s----------.html?wd={query}"
-        : s.id === "nnyy"
-          ? "https://nnyy.in/so?q={query}"
-          : new URL("?s={query}", s.homepage).href.replace("%7Bquery%7D", "{query}"),
+    : "https://nnyy.in/so?q={query}",
   enabled: true,
-  configured: ["ikanbot", "bandai-channel", "dm84", "nnyy"].includes(s.id),
+  configured: true,
 }));
 
 export function readHubSources(): HubSource[] {
@@ -82,8 +90,8 @@ export function readHubSources(): HubSource[] {
         ...arr.map((x) => {
           const builtin = defaultSites.find((d) => d.id === x.id);
           // Migrate old untested generic guesses to verified search paths.
-          if (builtin?.configured && !x.configured &&
-              (x.searchTemplate.endsWith("/?s={query}") ||
+          if (builtin?.configured && (!x.configured || x.id === "ikanbot") &&
+              (x.id === "ikanbot" || x.searchTemplate.endsWith("/?s={query}") ||
                x.searchTemplate.endsWith("?s={query}"))) {
             return { ...x, searchTemplate: builtin.searchTemplate, configured: true };
           }
@@ -110,20 +118,8 @@ function requirePublicHttps(raw: string): URL {
   return u;
 }
 
-export function makeHubSource(url: string): HubSource {
-  const u = requirePublicHttps(url.trim());
-  const home = u.origin + "/";
-  if (isExcludedHubSource({ id: "", homepage: home })) {
-    throw new Error("iKanBot 尚未实现并验证搜索、App 内播放与下载，按要求不纳入视频源");
-  }
-  return {
-    id: "custom-" + Date.now().toString(36),
-    name: u.hostname,
-    homepage: home,
-    searchTemplate: home + "?s={query}",
-    enabled: true,
-    configured: false,
-  };
+export function makeHubSource(_url: string): HubSource {
+  throw new Error("新增网站需要先完成搜索、APP 内播放及离线下载验证，暂不可直接添加");
 }
 
 export function validateSource(source: HubSource): void {
@@ -229,6 +225,9 @@ export async function searchPublicSite(source: HubSource, query: string): Promis
   discovered: boolean;
 }> {
   if (isExcludedHubSource(source)) throw new Error("该网站尚未通过完整功能验收，已从聚合搜索排除");
+  if (source.id === "kubb") {
+    return { items: await searchKubb(keywordNormalized(query)), template: source.searchTemplate, discovered: false };
+  }
   let resolved = source;
   let discovered = false;
   if (!source.configured) {
@@ -246,6 +245,78 @@ export async function searchPublicSite(source: HubSource, query: string): Promis
     template: resolved.searchTemplate,
     discovered,
   };
+}
+
+
+/** MyVideo category browsing uses public Nnyy listings, not hardcoded titles. */
+export const NNY_CATEGORIES = [
+  { id: "dongman", label: "动漫" },
+  { id: "dianying", label: "电影" },
+  { id: "dianshiju", label: "电视剧" },
+  { id: "zongyi", label: "综艺" },
+] as const;
+export type NnyCategory = typeof NNY_CATEGORIES[number]["id"];
+export type NnySort = "latest" | "popular";
+export type NnyGenre = { label: string; url: string };
+export type NnyCatalog = { results: HubResult[]; genres: NnyGenre[] };
+
+export function parseNnyCatalog(html: string, pageUrl: string, category: NnyCategory): NnyCatalog {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("script,style,noscript").forEach((x) => x.remove());
+  const titles: HubResult[] = [];
+  const visited = new Set<string>();
+  const route = new RegExp("^/" + category + "/[0-9]+\\.html$","i");
+  for (const a of doc.querySelectorAll("a[href]")) {
+    const href = absoluteUrl(pageUrl, a.getAttribute("href") || "");
+    if (!href) continue;
+    const u = new URL(href);
+    if (u.hostname !== "nnyy.in" || !route.test(u.pathname) || visited.has(u.pathname)) continue;
+    // The card image/heading may be in a sibling link; prefer the heading when present.
+    const card = a.closest("li,.item,.video,.module-item,.movie,.vod-item,.list-item") || a;
+    const heading = card.querySelector("h2,h3,h4,.title,.name");
+    const title = (heading?.textContent || a.getAttribute("title") || a.querySelector("img")?.getAttribute("alt") ||
+      a.textContent || "").trim().replace(/\s+/g, " ").slice(0, 125);
+    if (title.length < 2 || TITLE_SKIP.test(title)) continue;
+    const poster = normalizePoster(a, pageUrl);
+    titles.push({ id: "nnyy|" + u.origin + u.pathname, sourceId: "nnyy",
+      sourceName: "努努影院", title, url: u.origin + u.pathname,
+      ...(poster ? { poster } : {}) });
+    visited.add(u.pathname);
+    if (titles.length >= 48) break;
+  }
+  const genres: NnyGenre[] = [{ label: "全部", url: "https://nnyy.in/" + category + "/" }];
+  const seen = new Set(["全部"]);
+  for (const a of doc.querySelectorAll("a[href]")) {
+    const href = absoluteUrl(pageUrl, a.getAttribute("href") || "");
+    if (!href) continue;
+    const u = new URL(href);
+    if (u.hostname !== "nnyy.in" || u.pathname !== "/" + category + "/" ||
+        !u.searchParams.has("genre")) continue;
+    const label = (a.textContent || "").trim().replace(/\s+/g, "");
+    if (!label || label.length > 12 || seen.has(label)) continue;
+    genres.push({ label, url: u.origin + u.pathname + "?genre=" +
+      encodeURIComponent(u.searchParams.get("genre") || "") });
+    seen.add(label);
+    if (genres.length >= 24) break;
+  }
+  return { results: titles, genres };
+}
+
+export async function fetchNnyCatalog(
+  category: NnyCategory, sort: NnySort, genre?: string,
+): Promise<NnyCatalog> {
+  if (!NNY_CATEGORIES.some((entry) => entry.id === category)) throw new Error("无效分类");
+  const url = new URL("https://nnyy.in/" + category + "/");
+  if (genre) {
+    const g = new URL(genre);
+    if (g.protocol !== "https:" || g.hostname !== "nnyy.in" ||
+        g.pathname !== url.pathname || !g.searchParams.has("genre")) {
+      throw new Error("无效类别过滤地址");
+    }
+    url.searchParams.set("genre", g.searchParams.get("genre") || "");
+  }
+  if (sort === "popular") url.searchParams.set("ob", "click");
+  return parseNnyCatalog(await fetchHubHtml(url.href), url.href, category);
 }
 
 export function findDirectMedia(html: string, pageUrl: string): HubMedia[] {
@@ -312,10 +383,14 @@ export function findAllowedSiteEmbeds(html: string, pageUrl: string): HubMedia[]
 }
 
 export const listHubDownloads = () => invoke<HubDownload[]>("hub_list_downloads");
-export const downloadHubMedia = (url: string, title: string) =>
-  invoke<HubDownload>("hub_download_media", { url, title });
-export const downloadHubHls = (url: string, title: string) =>
-  invoke<HubDownload>("hub_download_hls", { url, title });
+export const listHubPending = () => invoke<HubPendingDownload[]>("hub_list_pending_downloads");
+export const pauseHubDownload = () => invoke<void>("hub_pause_download");
+export const discardHubPending = (id: string) =>
+  invoke<void>("hub_discard_pending_download", { id });
+export const downloadHubMedia = (url: string, title: string, key: string) =>
+  invoke<HubDownload>("hub_download_media", { url, title, key });
+export const downloadHubHls = (url: string, title: string, key: string) =>
+  invoke<HubDownload>("hub_download_hls", { url, title, key });
 export const deleteHubDownload = (id: string) => invoke<void>("hub_remove_download", { id });
 
 
@@ -438,4 +513,121 @@ export async function fetchNnyyEpisode(episodeUrl: string): Promise<HubMedia[]> 
     } catch { /* ignore unusable playback records */ }
   }
   return result;
+}
+
+
+/** Kubb TV public, anonymous GET endpoints (https://api.kubb.tv).
+ * The adapter uses only content explicitly returned for public viewing, not
+ * account tokens, restricted VIP streams or encryption workarounds.
+ */
+function keywordNormalized(query: string): string {
+  return query.trim().slice(0, 100);
+}
+type KubbRecord = Record<string, unknown>;
+function kubbObject(value: unknown): KubbRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as KubbRecord : null;
+}
+function kubbText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+function kubbMediaKey(url: string): string {
+  const target = new URL(url);
+  if (target.protocol !== "https:" || target.hostname !== "m.kubb.tv") {
+    throw new Error("无效的 Kubb 播放地址");
+  }
+  const mediaKey = /^\/play\/([A-Za-z0-9_-]{6,50})\/?$/.exec(target.pathname)?.[1];
+  if (!mediaKey) throw new Error("Kubb 播放地址缺少作品标识");
+  return mediaKey;
+}
+async function kubbGet(endpoint: "GetTitleGetData" | "VideoDetails" | "VideoChooseGather" | "getPlayData", params: Record<string,string>): Promise<KubbRecord> {
+  const path = endpoint === "GetTitleGetData" ? "/api/List/GetTitleGetData"
+    : "/api/Video/" + endpoint;
+  const target = new URL("https://api.kubb.tv" + path);
+  for (const [name,value] of Object.entries(params)) target.searchParams.set(name,value);
+  const json: unknown = await invoke("hub_fetch_public_json", { url: target.href });
+  const payload = kubbObject(json);
+  if (!payload || payload.ret !== 200) throw new Error("Kubb 公开接口未返回成功结果");
+  return kubbObject(payload.data) || {};
+}
+function kubbEpisodes(items: unknown): KubbRecord[] {
+  if (!Array.isArray(items)) return [];
+  return items.map(kubbObject).filter((item): item is KubbRecord => item !== null);
+}
+export async function searchKubb(query: string): Promise<HubResult[]> {
+  const search = keywordNormalized(query);
+  if (!search) return [];
+  const data = await kubbGet("GetTitleGetData", { SearchCriteria: search });
+  const out: HubResult[] = [];
+  const known = new Set<string>();
+  for (const item of kubbEpisodes(data.list)) {
+    const nested = kubbEpisodes(item.episodes);
+    const mediaKey = kubbText(item.mediaKey) || nested.map((e) => kubbText(e.mediaKey)).find(Boolean) || "";
+    const title = kubbText(item.title);
+    if (!/^[A-Za-z0-9_-]{6,50}$/.test(mediaKey) || !title || known.has(mediaKey)) continue;
+    const url = "https://m.kubb.tv/play/" + mediaKey;
+    known.add(mediaKey);
+    const poster = kubbText(item.coverImgUrl);
+    out.push({ id: "kubb|" + mediaKey, sourceId: "kubb", sourceName: "Kubb TV 酷播",
+      title, url, ...(poster.startsWith("https://") ? { poster } : {}) });
+    if (out.length >= 60) break;
+  }
+  return out;
+}
+function playableKubbLink(value: unknown): HubMedia | null {
+  const item = kubbObject(value);
+  if (!item || item.isVip !== false || item.isLimit === true) return null;
+  const raw = kubbText(item.mediaUrl);
+  let target: URL;
+  try { target = new URL(raw); } catch { return null; }
+  if (target.protocol !== "https:") return null;
+  const type = /\.m3u8(?:[?#]|$)/i.test(target.href) ? "hls"
+    : /\.mp4(?:[?#]|$)/i.test(target.href) ? "mp4"
+    : /\.webm(?:[?#]|$)/i.test(target.href) ? "webm" : null;
+  return type ? { url: target.href, type } : null;
+}
+export async function fetchKubbDetail(url: string): Promise<{ title: string; episodes: HubEpisode[] }> {
+  const mediaKey = kubbMediaKey(url);
+  const [details, tracks] = await Promise.all([
+    kubbGet("VideoDetails", { mediaKey }),
+    kubbGet("VideoChooseGather", { mediaKey }),
+  ]);
+  const detail = kubbObject(details.detailInfo);
+  const title = kubbText(detail?.title) || "Kubb 视频";
+  const episodes: HubEpisode[] = [];
+  const seen = new Set<string>();
+  for (const item of kubbEpisodes(tracks.list)) {
+    const episodeKey = kubbText(item.episodeKey);
+    // Directory results legitimately omit mediaUrl. Fetch actual playback URL only on selection.
+    if (item.isVip === true || item.isLimit === true ||
+        !/^[A-Za-z0-9_-]{6,50}$/.test(episodeKey) || seen.has(episodeKey)) continue;
+    const variantKey = kubbText(item.mediaKey) || mediaKey;
+    if (!/^[A-Za-z0-9_-]{6,50}$/.test(variantKey)) continue;
+    const label = kubbText(item.episodeTitle) || kubbText(item.resolutionDes) ||
+      kubbText(item.title) || "免费线路";
+    episodes.push({
+      title: label,
+      url: "https://m.kubb.tv/play/" + variantKey + "?id=" + encodeURIComponent(episodeKey),
+    });
+    seen.add(episodeKey);
+    if (episodes.length >= 180) break;
+  }
+  return { title, episodes };
+}
+export async function fetchKubbEpisode(episodeUrl: string): Promise<HubMedia[]> {
+  const mediaKey = kubbMediaKey(episodeUrl);
+  const episodeKey = new URL(episodeUrl).searchParams.get("id") || "";
+  if (!/^[A-Za-z0-9_-]{6,50}$/.test(episodeKey)) {
+    throw new Error("Kubb 选集缺少有效 episodeKey");
+  }
+  // Kubb defaults to the LAST episode unless episodeKey is sent explicitly.
+  // Verified against its public API: episodeKey=01 resolves 01, not 166-167.
+  const data = await kubbGet("getPlayData", { mediaKey, episodeKey });
+  for (const item of kubbEpisodes(data.list)) {
+    if (kubbText(item.episodeKey) !== episodeKey) continue;
+    const link = playableKubbLink(item);
+    if (!link) throw new Error("该剧集没有公开可下载的播放地址，可能需要 VIP 权限");
+    return [link];
+  }
+  throw new Error("Kubb 未返回所选剧集的播放线路，请重新选择");
 }

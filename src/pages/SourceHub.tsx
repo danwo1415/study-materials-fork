@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import { listen } from "@tauri-apps/api/event";
-import { api, LOCAL } from "../api";
+// Standalone playback origin; there is no Huangguo API import in MyVideo.
+const LOCAL = /Android|Windows/i.test(navigator.userAgent) ? "http://hg.localhost" : "hg://localhost";
 import {
-  type HubDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
-  makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
-  fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, validateSource, listHubDownloads,
-  downloadHubMedia, downloadHubHls, deleteHubDownload,
+  type HubDownload, type HubPendingDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
+  readHubSources, saveHubSources, searchPublicSite,
+  fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, listHubDownloads,
+  downloadHubMedia, downloadHubHls, deleteHubDownload, listHubPending, discardHubPending, pauseHubDownload,
+  NNY_CATEGORIES, fetchNnyCatalog, type NnyCategory, type NnySort, type NnyGenre,
+  fetchKubbDetail, fetchKubbEpisode, fetchIkanbotCatalog, type IkanbotLine,
 } from "../sourceHub";
 
 type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: string };
 
 type AdSpan = { start: number; end: number };
 const AD_SECONDS = 6;
-const AD_STORAGE_PREFIX = "hghub-ad-skips-v1:";
+const AD_STORAGE_PREFIX = "myvideo-ad-skips-v1:";
 
 function readAdSkips(key: string): AdSpan[] {
   try {
@@ -129,8 +132,6 @@ function EmbeddedVideo({ media, adMarkerKey }: {
 
 export default function SourceHub() {
   const [sources, setSources] = useState<HubSource[]>(readHubSources);
-  const [newUrl, setNewUrl] = useState("");
-  const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState("all");
   const [results, setResults] = useState<HubResult[]>([]);
@@ -140,12 +141,23 @@ export default function SourceHub() {
   const [media, setMedia] = useState<HubMedia[]>([]);
   const [episodes, setEpisodes] = useState<HubEpisode[]>([]);
   const [activeEpisode, setActiveEpisode] = useState<HubEpisode | null>(null);
+  const [ikanbotLines, setIkanbotLines] = useState<IkanbotLine[]>([]);
+  const [ikanbotLine, setIkanbotLine] = useState(0);
   const [detailLoading, setDetailLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [downloads, setDownloads] = useState<HubDownload[]>([]);
+  const [pending, setPending] = useState<HubPendingDownload[]>([]);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState("");
-  const [view, setView] = useState<"search" | "sites" | "downloads">("search");
+  const [view, setView] = useState<"categories" | "search" | "downloads">("categories");
+  const [category, setCategory] = useState<NnyCategory>("dongman");
+  const [sort, setSort] = useState<NnySort>("latest");
+  const [genre, setGenre] = useState("");
+  const [genres, setGenres] = useState<NnyGenre[]>([]);
+  const [catalogItems, setCatalogItems] = useState<HubResult[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const catalogRequest = useRef(0);
   const searchCounter = useRef(0);
   const hubRoot = useRef<HTMLDivElement>(null);
 
@@ -157,38 +169,46 @@ export default function SourceHub() {
   useEffect(() => { saveHubSources(sources); }, [sources]);
   useEffect(() => {
     void listHubDownloads().then(setDownloads).catch(() => {});
-    let unlisten: (() => void) | undefined;
+    void listHubPending().then(setPending).catch(() => {});
+    let mounted = true;
+    const unlisteners: Array<() => void> = [];
+    const register = (fn: () => void) => {
+      if (mounted) unlisteners.push(fn);
+      else fn();
+    };
     void listen<{ received: number; total: number | null; completedParts?: number; totalParts?: number }>("hub-download-progress", (event) => {
       const { received, total, completedParts, totalParts } = event.payload;
       setDownloadProgress(total ? Math.round(received / total * 100) + "%"
-        : (completedParts && totalParts ? completedParts + "/" + totalParts + " 片 · " : "") + (received / 1048576).toFixed(1) + " MB");
-    }).then((fn) => { unlisten = fn; });
-    return () => unlisten?.();
+        : (totalParts ? (completedParts || 0) + "/" + totalParts + " 片 · " : "") + (received / 1048576).toFixed(1) + " MB");
+    }).then(register).catch(() => {});
+    void listen<string>("hub-download-status", (event) => {
+      setDownloadProgress(event.payload);
+    }).then(register).catch(() => {});
+    return () => { mounted = false; unlisteners.forEach((fn) => fn()); };
   }, []);
+
+  const loadCatalog = async (cat: NnyCategory, order: NnySort, filter: string) => {
+    const req = ++catalogRequest.current;
+    setCatalogLoading(true);
+    setCatalogError("");
+    try {
+      const result = await fetchNnyCatalog(cat, order, filter || undefined);
+      if (req !== catalogRequest.current) return;
+      setCatalogItems(result.results);
+      if (!filter) setGenres(result.genres);
+      if (!result.results.length) setCatalogError("该分类没有解析到作品。可刷新重试，或使用搜索功能。");
+    } catch (error) {
+      if (req === catalogRequest.current) {
+        setCatalogItems([]);
+        setCatalogError("分类加载失败：" + (error as Error).message);
+      }
+    } finally { if (req === catalogRequest.current) setCatalogLoading(false); }
+  };
+
+  useEffect(() => { void loadCatalog(category, sort, genre); }, [category, sort, genre]);
 
   const updateSource = (id: string, patch: Partial<HubSource>) =>
     setSources((prev) => prev.map((s) => s.id === id ? { ...s, ...patch } : s));
-
-  const addSite = async () => {
-    try {
-      const site = makeHubSource(newUrl);
-      if (sources.some((s) => new URL(s.homepage).hostname === new URL(site.homepage).hostname)) {
-        setMessage("该网站已在列表中，可直接编辑搜索规则");
-        return;
-      }
-      setSources((prev) => [...prev, site]);
-      setNewUrl("");
-      setAdding(false);
-      setMessage("已保存 " + site.name + "，正在尝试识别公开搜索表单…");
-      try {
-        const found = await discoverSearchTemplate(site);
-        if (found) {
-          updateSource(site.id, { searchTemplate: found, configured: true });
-          setMessage("已识别 " + site.name + " 的 GET 搜索表单，请实际测试搜索结果");
-        } else setMessage("已保存网站，但未识别到标准公开搜索表单；需要手动配置搜索规则或开发专用适配器");
-      } catch (e) { setMessage("网站已保存；自动检测失败：" + (e as Error).message); }
-    } catch (e) { setMessage((e as Error).message); }
-  };
 
   const searchAll = async (keyword: string) => {
     const k = keyword.trim();
@@ -228,13 +248,28 @@ export default function SourceHub() {
     scrollToHubTop();
     setMedia([]);
     setEpisodes([]);
+    setIkanbotLines([]);
+    setIkanbotLine(0);
     setActiveEpisode(null);
     setDetailLoading(true);
     setMessage("");
     try {
-      const html = await fetchHubHtml(result.url);
-      setMedia(findDirectMedia(html, result.url));
-      setEpisodes(findPublicEpisodes(html, result.url, result.sourceId));
+      if (result.sourceId === "kubb") {
+        const detail = await fetchKubbDetail(result.url);
+        setMedia([]);
+        setEpisodes(detail.episodes);
+        if (!detail.episodes.length) setMessage("Kubb 暂时没有可供匿名播放的免费线路；VIP 内容不会绕过授权。");
+      } else if (result.sourceId === "ikanbot") {
+        const catalog = await fetchIkanbotCatalog(result.url);
+        setIkanbotLines(catalog.lines);
+        setIkanbotLine(0);
+        setEpisodes(catalog.lines[0]?.episodes || []);
+        if (!catalog.lines.length) setMessage("爱看机器人没有返回公开可播放的 HLS 线路");
+      } else {
+        const html = await fetchHubHtml(result.url);
+        setMedia(findDirectMedia(html, result.url));
+        setEpisodes(findPublicEpisodes(html, result.url, result.sourceId));
+      }
     } catch (e) { setMessage((e as Error).message); }
     finally { setDetailLoading(false); }
   };
@@ -245,7 +280,14 @@ export default function SourceHub() {
     setDetailLoading(true);
     setMessage("");
     try {
-      if (selected?.sourceId === "nnyy" && new URL(ep.url).pathname.startsWith("/_gp/")) {
+      if (selected?.sourceId === "kubb") {
+        setMedia(await fetchKubbEpisode(ep.url));
+      } else if (selected?.sourceId === "ikanbot") {
+        if (!/^https:\/\/[^\s]+\.m3u8(?:[?#]|$)/i.test(ep.url)) {
+          throw new Error("该集没有有效 HTTPS HLS 播放地址");
+        }
+        setMedia([{ type: "hls", url: ep.url }]);
+      } else if (selected?.sourceId === "nnyy" && new URL(ep.url).pathname.startsWith("/_gp/")) {
         const streams = await fetchNnyyEpisode(ep.url);
         if (!streams.length) setMessage("该剧集没有公开可识别的播放地址");
         setMedia(streams);
@@ -257,20 +299,72 @@ export default function SourceHub() {
     finally { setDetailLoading(false); }
   };
 
-  const download = async (item: HubMedia) => {
-    if (!selected || item.type === "embed") return;
+  const refreshPending = async () => {
+    try { setPending(await listHubPending()); } catch { /* keep last known state */ }
+  };
+
+  const transfer = async (url: string, kind: "mp4" | "webm" | "hls", title: string, key: string) => {
     setDownloading(true);
-    setDownloadProgress("开始下载");
+    setDownloadProgress("正在连接…");
     setMessage("");
     try {
-      const fullTitle = activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title;
-      const saved = item.type === "hls"
-        ? await downloadHubHls(item.url, fullTitle)
-        : await downloadHubMedia(item.url, fullTitle);
-      setDownloads((prev) => [...prev, saved]);
-      setMessage("已下载到 App 私有目录，可在「离线」查看");
+      const saved = kind === "hls"
+        ? await downloadHubHls(url, title, key)
+        : await downloadHubMedia(url, title, key);
+      setDownloads((prev) => [...prev.filter((x) => x.id !== saved.id), saved]);
+      setMessage("已保存完整视频，可在「离线」播放");
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setDownloading(false);
+      await refreshPending();
+    }
+  };
+
+  const download = async (item: HubMedia) => {
+    if (!selected || item.type === "embed" || downloading) return;
+    const fullTitle = activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title;
+    // Stable identity is the source and episode, not a signed CDN URL.
+    const key = JSON.stringify({
+      sourceId: selected.sourceId,
+      episodeUrl: activeEpisode?.url || selected.url,
+      kind: item.type,
+      line: media.findIndex((track) => track.url === item.url && track.type === item.type),
+    });
+    await transfer(item.url, item.type, fullTitle, key);
+  };
+
+  const resume = async (item: HubPendingDownload) => {
+    if (downloading) return;
+    let mediaUrl = item.sourceUrl;
+    try {
+      const ref = JSON.parse(item.key) as {
+        sourceId?: string; episodeUrl?: string; kind?: string; line?: number;
+      };
+      if (typeof ref.episodeUrl === "string") {
+        let options: HubMedia[] = [];
+        if (ref.sourceId === "kubb") {
+          options = await fetchKubbEpisode(ref.episodeUrl);
+        } else if (ref.sourceId === "nnyy" && /\/_gp\//.test(ref.episodeUrl)) {
+          options = await fetchNnyyEpisode(ref.episodeUrl);
+        }
+        if (options.length) {
+          const index = typeof ref.line === "number" && ref.line >= 0 ? ref.line : 0;
+          const line = options[index] || options[0];
+          if (line.type === item.kind) mediaUrl = line.url;
+        }
+      }
+    } catch { /* old or temporary source: use the original URL */ }
+    await transfer(mediaUrl, item.kind, item.title, item.key);
+  };
+
+  const discard = async (id: string) => {
+    if (downloading) return;
+    try {
+      await discardHubPending(id);
+      await refreshPending();
+      setMessage("已删除未完成的下载文件");
     } catch (e) { setMessage((e as Error).message); }
-    finally { setDownloading(false); }
   };
 
   const removeDownload = async (id: string) => {
@@ -284,6 +378,8 @@ export default function SourceHub() {
     setSelected(null);
     setActiveEpisode(null);
     setEpisodes([]);
+    setIkanbotLines([]);
+    setIkanbotLine(0);
     setMedia([]);
     setMessage("");
     scrollToHubTop();
@@ -292,11 +388,45 @@ export default function SourceHub() {
   const btn = "px-3 py-2 rounded-(--r-ctl) bg-s3 text-on text-[12px] pressable";
   const field = "w-full min-w-0 p-2.5 rounded-(--r-sm) bg-s3 text-on text-[12px] outline-none border border-white/10";
   return <div ref={hubRoot} className="flex flex-col gap-3 text-on">
-    <div className="flex gap-2">
+    <div className="flex gap-2 flex-wrap">
+      <button className={btn + (view === "categories" ? " bg-primary text-on-primary" : "")} onClick={() => setView("categories")}>分类</button>
       <button className={btn + (view === "search" ? " bg-primary text-on-primary" : "")} onClick={() => setView("search")}>聚合搜索</button>
-      <button className={btn + (view === "sites" ? " bg-primary text-on-primary" : "")} onClick={() => setView("sites")}>管理网站</button>
-      <button className={btn + (view === "downloads" ? " bg-primary text-on-primary" : "")} onClick={() => setView("downloads")}>离线 ({downloads.length})</button>
+      <button className={btn + (view === "downloads" ? " bg-primary text-on-primary" : "")} onClick={() => { setView("downloads"); void refreshPending(); }}>离线 ({downloads.length}{pending.length ? " + " + pending.length : ""})</button>
     </div>
+    {view === "categories" && <div className="space-y-3">
+      <div className="text-[13px] font-semibold">努努影院 · 分类浏览</div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {NNY_CATEGORIES.map((c) => <button key={c.id} type="button"
+          onClick={() => { setCategory(c.id); setGenre(""); setGenres([]); setCatalogItems([]); }}
+          className={btn + " shrink-0" + (category === c.id ? " bg-primary text-on-primary" : "")}>{c.label}</button>)}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={btn + (sort === "latest" ? " bg-primary text-on-primary" : "")}
+          onClick={() => setSort("latest")}>最近更新</button>
+        <button type="button" className={btn + (sort === "popular" ? " bg-primary text-on-primary" : "")}
+          onClick={() => setSort("popular")}>按人气</button>
+        <button type="button" className={btn} onClick={() => void loadCatalog(category, sort, genre)}>刷新</button>
+      </div>
+      {genres.length > 1 && <div className="flex gap-2 overflow-x-auto pb-1" aria-label="类型筛选">
+        {genres.map((g) => <button key={g.url} type="button" onClick={() => setGenre(g.label === "全部" ? "" : g.url)}
+          className={btn + " shrink-0" + ((genre === g.url || (!genre && g.label === "全部")) ? " bg-primary text-on-primary" : "")}>{g.label}</button>)}
+      </div>}
+      {catalogLoading && <p className="text-[12px] text-mut" role="status">正在加载真实分类作品…</p>}
+      {catalogError && <p className="text-[12px] text-mut" role="status">{catalogError}</p>}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {catalogItems.map((item) => <button type="button" key={item.id}
+          className="min-w-0 text-left rounded-(--r-md) bg-s2 overflow-hidden pressable"
+          onClick={() => { setView("search"); void openResult(item); }}>
+          <div className="aspect-[3/4] bg-s3 flex items-center justify-center overflow-hidden">
+            {item.poster ? <img src={LOCAL + "/seg?u=" + encodeURIComponent(item.poster)} alt="" loading="lazy"
+              className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+              : <span className="text-2xl text-mut">▶</span>}
+          </div>
+          <div className="px-2 py-2 text-[12px] font-medium break-words line-clamp-2 min-h-11">{item.title}</div>
+        </button>)}
+      </div>
+      <div className="text-[11px] text-mut">内容来自努努影院的公开分类页面。作品是否可播放仍以实际剧集线路为准。</div>
+    </div>}
     {view === "search" && <>
       {!selected && <>
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void searchAll(query); }}>
@@ -309,7 +439,7 @@ export default function SourceHub() {
         <option value="all">全部已启用网站</option>
         {sources.filter((s) => s.enabled).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select>
-      <div className="text-[11px] text-mut">搜索依赖各网站的公开网页结构；未验证的网站可能没有结果。示例视频不是搜索范围限制。</div>
+      <div className="text-[11px] text-mut">努努与 Kubb 支持播放和离线；爱看机器人目前仅测试原生在线播放，不提供下载。</div>
       {Object.keys(statuses).length > 0 && <div className="rounded-(--r-md) bg-s2 p-3 space-y-1">
         {sources.filter((s) => !!statuses[s.id]).map((s) => <div key={s.id} className="text-[11px] text-mut">
           <span className="text-on">{s.name}</span> · {statuses[s.id].state === "searching" ? "搜索中" :
@@ -334,9 +464,20 @@ export default function SourceHub() {
         <div className="font-semibold text-[17px]">{selected.title}</div>
         <div className="text-[11px] text-mut">{selected.sourceName}{selected.sourceId === "nnyy" ? " · 已支持公开选集接口" : ""}</div>
         {selected.sourceId === "ikanbot" && <div className="rounded-(--r-sm) bg-s3 p-3 space-y-2">
-          <div className="text-[12px] font-semibold">iKanBot 的播放需要网站动态授权</div>
-          <div className="text-[11px] text-mut">已确认其网页播放器使用带 token 的接口加载视频，并设置 SAMEORIGIN 禁止跨网站嵌入。此版本可展示搜索结果，但尚未获得能在本 App 内稳定播放的授权接口。</div>
-          <button type="button" className={btn} onClick={() => { void api.openUrl(selected.url); }}>前往 iKanBot 原站播放</button>
+          <div className="text-[12px] font-semibold">爱看机器人 · 原生播放测试</div>
+          <div className="text-[11px] text-mut">读取该网站公开网页的播放线路，使用 MyVideo 原生 HLS 播放器。此来源暂不支持下载；如线路失效可切换线路重新播放。</div>
+        </div>}
+        {selected.sourceId === "ikanbot" && ikanbotLines.length > 0 && <div className="space-y-2">
+          <div className="text-[12px] font-semibold">播放线路（{ikanbotLines.length}）</div>
+          <div className="flex gap-2 overflow-x-auto pb-2">{ikanbotLines.map((line, index) =>
+            <button type="button" key={index} className={btn + " shrink-0" + (ikanbotLine === index ? " bg-primary text-on-primary" : "")}
+              onClick={() => {
+                setIkanbotLine(index);
+                setEpisodes(line.episodes);
+                setActiveEpisode(null);
+                setMedia([]);
+                setMessage("");
+              }}>{line.name}</button>)}</div>
         </div>}
 
         {episodes.length > 0 && <div className="space-y-2">
@@ -351,57 +492,34 @@ export default function SourceHub() {
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
             <EmbeddedVideo key={m.url + "|" + (activeEpisode?.url || "")} media={m}
               adMarkerKey={selected.sourceId === "nnyy" ? "nnyy|" + (activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title) : undefined} />
-            {(m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
-              onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频"}</button>}
-            {m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
+            {selected.sourceId !== "ikanbot" && (m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
+              onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频（支持续传）"}</button>}
+            {selected.sourceId !== "ikanbot" && m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
           </div>) : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
-        {activeEpisode && <button className={btn} onClick={() => { void api.openUrl(activeEpisode.url); }}>在原网站打开当前剧集</button>}
-        <button className={btn} onClick={() => { void api.openUrl(selected.url); }}>在原网站打开详情</button>
+
       </div>}
       {!selected && !searching && !results.length && query.trim() && Object.keys(statuses).length > 0 &&
         <p className="text-[12px] text-mut">未找到候选结果。可到「管理网站」中调整搜索规则，或使用原网站搜索。</p>}
     </>}
-    {view === "sites" && <>
-      <button className={btn + " bg-primary text-on-primary self-start"} onClick={() => setAdding(!adding)}>
-        {adding ? "取消添加" : "＋ 添加视频网站"}
-      </button>
-      {adding && <div className="rounded-(--r-md) p-3 bg-s2 space-y-2">
-        <label className="text-[12px]">视频网站主页或作品网址</label>
-        <input className={field} placeholder="https://example.com/" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} />
-        <button className={btn} onClick={() => { void addSite(); }}>保存并自动识别</button>
-        <p className="text-[11px] text-mut">保存网址不会自动解析任意网站。保存后可设置网站的公开搜索地址模板。</p>
-      </div>}
-      {sources.map((s) => <div key={s.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
-        <div className="flex items-center gap-2 justify-between">
-          <div className="text-[13px] font-semibold break-all">{s.name}</div>
-          <label className="flex items-center gap-1 text-[11px] text-mut">
-            <input type="checkbox" checked={s.enabled} onChange={(e) => updateSource(s.id, { enabled: e.target.checked })} />启用
-          </label>
-        </div>
-        <div className="text-[11px] text-mut break-all">{s.homepage}</div>
-        <label className="block text-[11px]">搜索 URL 模板（用 {"{query}"} 表示关键词）</label>
-        <input className={field} value={s.searchTemplate} onChange={(e) =>
-          updateSource(s.id, { searchTemplate: e.target.value, configured: false })} />
-        <div className="flex gap-2 items-center justify-between">
-          <button className={btn} onClick={async () => {
-            try {
-              const found = await discoverSearchTemplate(s);
-              if (found) { updateSource(s.id, { searchTemplate: found, configured: true }); setMessage("已识别公开搜索表单，可尝试搜索"); }
-              else setMessage("无法自动识别搜索表单，请手动配置或制作专用适配器");
-            } catch (e) { setMessage((e as Error).message); }
-          }}>自动识别</button>
-          <button className={btn} onClick={() => {
-            try { validateSource(s); updateSource(s.id, { configured: true }); setMessage(s.name + " 规则格式有效；实际搜索仍需测试"); }
-            catch (e) { setMessage((e as Error).message); }
-          }}>检查规则</button>
-          {s.id.startsWith("custom-") && <button className={btn} onClick={() =>
-            setSources((prev) => prev.filter((x) => x.id !== s.id))}>删除</button>}
-        </div>
-        <div className="text-[10px] text-mut">{s.configured ? "规则格式已检查（未验证站点兼容性）" : "待验证搜索规则"}</div>
-      </div>)}
-    </>}
     {view === "downloads" && <div className="space-y-2">
-      <div className="text-[12px] text-mut">完成下载的 MP4/WebM 保存在 App 私有目录，可离线播放。卸载 App 可能删除这些文件。</div>
+      <div className="text-[12px] text-mut">下载中断后，已完成的 HLS 分片或 MP4 部分数据会留在本机；点击「继续」可续传。卸载 MyVideo 仍可能删除文件。</div>
+      {downloading && <div className="rounded-(--r-md) bg-s2 p-3 flex items-center justify-between gap-2">
+        <span className="text-[12px]">下载中：{downloadProgress}</span>
+        <button className={btn} onClick={() => { void pauseHubDownload(); }}>暂停下载</button>
+      </div>}
+      {pending.map((task) => <div key={task.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
+        <div className="text-[13px] font-semibold break-words">{task.title}</div>
+        <div className="text-[11px] text-mut">
+          已保存 {(task.received / 1048576).toFixed(1)} MB
+          {task.total ? " / " + (task.total / 1048576).toFixed(1) + " MB" : ""}
+          {task.totalParts ? " · " + (task.completedParts || 0) + "/" + task.totalParts + " 片" : ""}
+        </div>
+        <div className="flex gap-2">
+          <button className={btn + " bg-primary text-on-primary"} disabled={downloading}
+            onClick={() => { void resume(task); }}>继续下载</button>
+          <button className={btn} disabled={downloading} onClick={() => { void discard(task.id); }}>删除任务</button>
+        </div>
+      </div>)}
       {downloads.length ? downloads.map((d) => <div key={d.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
         <div className="text-[13px] font-semibold">{d.title}</div>
         <div className="text-[11px] text-mut">{(d.bytes / 1048576).toFixed(1)} MB</div>
@@ -410,7 +528,7 @@ export default function SourceHub() {
           ? { url: LOCAL + "/offline-hls?id=" + encodeURIComponent(d.id) + "&file=index.m3u8", type: "offline-hls" }
           : { url: LOCAL + "/offline?id=" + encodeURIComponent(d.id), type: "offline" }} />
         <button className={btn} onClick={() => { void removeDownload(d.id); }}>删除本地文件</button>
-      </div>) : <div className="text-[12px] text-mut">还没有离线视频。先在聚合搜索里找到可直接下载的 MP4/WebM。</div>}
+      </div>) : <div className="text-[12px] text-mut">还没有离线视频。先搜索作品并选择允许下载的播放线路。</div>}
     </div>}
     {message && <p className="text-[12px] rounded-(--r-md) bg-s3 p-3 break-words">{message}</p>}
   </div>;
