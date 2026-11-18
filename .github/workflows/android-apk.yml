@@ -1,9 +1,9 @@
-name: Build Android APK (ARM64)
+name: Build MyVideo APK (ARM64)
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [myvideo]
     paths:
       - ".github/workflows/android-apk.yml"
       - "src/**"
@@ -15,12 +15,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-apk-${{ github.ref }}
+  group: myvideo-apk-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   android:
-    name: Build installable Android test APK
+    name: Build independent MyVideo Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -68,7 +68,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-          key: android-arm64-test
+          key: myvideo-arm64
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -90,13 +90,13 @@ jobs:
             echo "::error::No Android APK was produced"
             exit 1
           fi
-          cp "$APK" artifacts/HGhub_1.2.1_android_arm64_test.apk
+          cp "$APK" artifacts/MyVideo_1.0.0_android_arm64_test.apk
           sha256sum artifacts/*.apk | tee artifacts/SHA256SUMS.txt
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: HGhub-Android-ARM64-APK
+          name: MyVideo-Android-ARM64-APK
           path: artifacts/*
           if-no-files-found: error
           retention-days: 30
