@@ -204,3 +204,32 @@ for params in [
         list_=data.get("list",[]) if isinstance(data,dict) else []
         print("KUBB_SEARCH_PARAM",json.dumps(params,ensure_ascii=False),"ret",obj.get("ret"),"n",len(list_),"first_shape",repr(summarize_response(list_[0]))[:1100] if list_ else None,flush=True)
     except Exception as e: print("KUBB_SEARCH_PARAM_ERROR",str(e)[:130],flush=True)
+
+# Find exact client-side search query params and anonymous media manifest availability.
+try:
+    url="https://m.kubb.tv/script/chunk-cc6e1d50.1791277306588.js"
+    with urllib.request.urlopen(urllib.request.Request(url,headers=HEADERS),timeout=12) as response:
+        content=response.read(750000).decode("utf-8","replace")
+    for term in ['a("2f22")','Object(i["d"])','Object(s["d"])','Object(f["d"])','getTitleGetData','keyWord:this','keyword:this','keyWord:e','keyWord:t','searchKey','searchVal','SearchList','searchData']:
+        matches=list(re.finditer(re.escape(term),content,re.I))
+        print("SEARCH_CALL",term,"n",len(matches),flush=True)
+        for m in matches[:4]:
+            print("SEARCH_PARAMS_CTX",repr(content[max(0,m.start()-520):min(len(content),m.end()+850)]),flush=True)
+except Exception as e: print("SEARCH_SCRIPT_ERROR",str(e)[:140],flush=True)
+
+try:
+    url="https://api.kubb.tv/api/Video/getPlayData?mediaKey=qVyzCcnhWtG"
+    with urllib.request.urlopen(urllib.request.Request(url,headers={**HEADERS,"Accept":"application/json"}),timeout=10) as response:
+        payload=json.load(response)
+    items=payload.get("data",{}).get("list",[])
+    candidate=next((item.get("mediaUrl") for item in items if not item.get("isVip") and item.get("mediaUrl","").startswith("https://")),None)
+    if candidate:
+        req=urllib.request.Request(candidate,headers={"User-Agent":HEADERS["User-Agent"],"Referer":"https://m.kubb.tv/"})
+        with urllib.request.urlopen(req,timeout=13) as response:
+            raw=response.read(55000).decode("utf-8","replace")
+            ctype=response.headers.get("Content-Type")
+        print("KUBB_HLS_MANIFEST",json.dumps({"type":ctype,"valid":raw.lstrip().startswith("#EXTM3U"),
+            "encrypted":bool(re.search(r"#EXT-X-KEY:METHOD=(?!NONE)",raw)),
+            "lines":len(raw.splitlines()),"segments":sum(1 for x in raw.splitlines() if x and not x.startswith("#")),
+            "discontinuities":raw.count("#EXT-X-DISCONTINUITY"),"master":"#EXT-X-STREAM-INF" in raw},ensure_ascii=False),flush=True)
+except Exception as e:print("KUBB_HLS_ERROR",type(e).__name__,str(e)[:130],flush=True)
