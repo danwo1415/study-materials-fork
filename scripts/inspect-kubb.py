@@ -468,3 +468,17 @@ try:
   matches=list(dict.fromkeys(urlparse(urljoin(resp.url,h)).path for h,_ in p.links if "/play/" in h))
   print("IKANBOT_SEARCH_CHECK",json.dumps({"status":resp.status,"title":"".join(p.title)[:100],"play_links":len(matches),"target_present":"/play/442095" in matches,"samples":matches[:10]},ensure_ascii=False),flush=True)
 except Exception as e:print("IKANBOT_SEARCH_CHECK_ERROR",type(e).__name__,str(e)[:100],flush=True)
+
+
+# Browser-side token implementation inspection: inspect site-published script only.
+print("==== IKANBOT TOKEN SCRIPT STRUCTURE",flush=True)
+try:
+ with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/play/442095",headers=HEADERS),timeout=12) as response:
+  html=response.read(190000).decode("utf-8","replace")
+ for m in list(re.finditer("function get_tks|function\\s+get_tks|\\bget_tks\\(",html)):
+  near=html[max(0,m.start()-100):m.start()+4400]
+  near=re.sub(r'https?://[^\s"\'<>]+','[url]',near)
+  # The original page source is public; do not expose actual token value.
+  near=re.sub(r'(window\.v_tks\s*=\s*)[^;]+',r'\1"[redacted]"',near)
+  print("IKANBOT_TOKEN_FUNCTION",repr(near[:3800]),flush=True)
+except Exception as e:print("IKANBOT_TOKEN_SCRIPT_ERROR",type(e).__name__,str(e)[:140],flush=True)
