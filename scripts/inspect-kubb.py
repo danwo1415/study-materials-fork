@@ -249,3 +249,44 @@ for endpoint, params in [
   items=data.get("list",[])
   print("KUBB_NOAUTH_JSON",endpoint,"q",list(params.values())[0],"ret",obj.get("ret"),"n",len(items),"first",repr(summarize_response(items[0]))[:2400] if items else None,flush=True)
  except Exception as e: print("KUBB_NOAUTH_ERROR",endpoint,type(e).__name__,str(e)[:150],flush=True)
+
+
+# Diagnosis of publicly visible anime episode collections; do not fetch video bytes.
+print("==== INUYASHA PUBLIC EPISODE DIAGNOSTICS", flush=True)
+def safe_str(value, n=50):
+    return str(value)[:n] if isinstance(value,(str,int,float)) else ""
+def api_data(endpoint, params):
+    url="https://api.kubb.tv"+endpoint+"?"+urlencode(params)
+    req=urllib.request.Request(url,headers={"User-Agent":HEADERS["User-Agent"],"Accept":"application/json"})
+    with urllib.request.urlopen(req,timeout=12) as response:
+        payload=json.loads(response.read(700000))
+    return payload.get("data",{})
+try:
+    search=api_data("/api/List/GetTitleGetData",{"SearchCriteria":"犬夜叉"})
+    works=search.get("list",[])
+    print("INUYASHA_SEARCH",json.dumps([{"title":safe_str(w.get("title")),
+      "count":len(w.get("episodes",[])),
+      "sample":[{"title":safe_str(e.get("title")),"episodeTitle":safe_str(e.get("episodeTitle")),
+        "mediaKey":safe_str(e.get("mediaKey")),"episodeKey":safe_str(e.get("episodeKey"))}
+        for e in w.get("episodes",[])[:6]]} for w in works[:3]],ensure_ascii=False),flush=True)
+    for work in works[:2]:
+      items=work.get("episodes",[])
+      for media_key in list(dict.fromkeys(safe_str(x.get("mediaKey")) for x in (items[:1]+items[-1:]) if x.get("mediaKey"))):
+        for endpoint in ["/api/Video/VideoDetails","/api/Video/VideoChooseGather","/api/Video/getPlayData"]:
+            try:
+                payload=api_data(endpoint,{"mediaKey":media_key})
+                li=payload.get("list",[])
+                print("INUYASHA_API",json.dumps({"key":media_key,"endpoint":endpoint,
+                    "detailTitle":safe_str(payload.get("detailInfo",{}).get("title")),
+                    "listLen":len(li),
+                    "sample":[{"title":safe_str(item.get("title")),
+                               "episodeTitle":safe_str(item.get("episodeTitle")),
+                               "episodeKey":safe_str(item.get("episodeKey")),
+                               "mediaKey":safe_str(item.get("mediaKey")),
+                               "isVip":item.get("isVip"),"isLimit":item.get("isLimit"),
+                               "hasMediaUrl":bool(item.get("mediaUrl"))}
+                               for item in (li[:3]+li[-3:])]},ensure_ascii=False),flush=True)
+            except Exception as e:
+                print("INUYASHA_API_ERROR",endpoint,type(e).__name__,str(e)[:120],flush=True)
+except Exception as e:
+    print("INUYASHA_DIAG_ERROR",type(e).__name__,str(e)[:140],flush=True)
