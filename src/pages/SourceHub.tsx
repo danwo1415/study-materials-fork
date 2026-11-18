@@ -9,7 +9,7 @@ import {
   fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, listHubDownloads,
   downloadHubMedia, downloadHubHls, deleteHubDownload, listHubPending, discardHubPending, pauseHubDownload,
   NNY_CATEGORIES, fetchNnyCatalog, type NnyCategory, type NnySort, type NnyGenre,
-  fetchKubbDetail, fetchKubbEpisode,
+  fetchKubbDetail, fetchKubbEpisode, fetchIkanbotCatalog, type IkanbotLine,
 } from "../sourceHub";
 
 type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: string };
@@ -141,6 +141,8 @@ export default function SourceHub() {
   const [media, setMedia] = useState<HubMedia[]>([]);
   const [episodes, setEpisodes] = useState<HubEpisode[]>([]);
   const [activeEpisode, setActiveEpisode] = useState<HubEpisode | null>(null);
+  const [ikanbotLines, setIkanbotLines] = useState<IkanbotLine[]>([]);
+  const [ikanbotLine, setIkanbotLine] = useState(0);
   const [detailLoading, setDetailLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [downloads, setDownloads] = useState<HubDownload[]>([]);
@@ -246,6 +248,8 @@ export default function SourceHub() {
     scrollToHubTop();
     setMedia([]);
     setEpisodes([]);
+    setIkanbotLines([]);
+    setIkanbotLine(0);
     setActiveEpisode(null);
     setDetailLoading(true);
     setMessage("");
@@ -255,6 +259,12 @@ export default function SourceHub() {
         setMedia([]);
         setEpisodes(detail.episodes);
         if (!detail.episodes.length) setMessage("Kubb 暂时没有可供匿名播放的免费线路；VIP 内容不会绕过授权。");
+      } else if (result.sourceId === "ikanbot") {
+        const catalog = await fetchIkanbotCatalog(result.url);
+        setIkanbotLines(catalog.lines);
+        setIkanbotLine(0);
+        setEpisodes(catalog.lines[0]?.episodes || []);
+        if (!catalog.lines.length) setMessage("爱看机器人没有返回公开可播放的 HLS 线路");
       } else {
         const html = await fetchHubHtml(result.url);
         setMedia(findDirectMedia(html, result.url));
@@ -272,6 +282,11 @@ export default function SourceHub() {
     try {
       if (selected?.sourceId === "kubb") {
         setMedia(await fetchKubbEpisode(ep.url));
+      } else if (selected?.sourceId === "ikanbot") {
+        if (!/^https:\/\/[^\s]+\.m3u8(?:[?#]|$)/i.test(ep.url)) {
+          throw new Error("该集没有有效 HTTPS HLS 播放地址");
+        }
+        setMedia([{ type: "hls", url: ep.url }]);
       } else if (selected?.sourceId === "nnyy" && new URL(ep.url).pathname.startsWith("/_gp/")) {
         const streams = await fetchNnyyEpisode(ep.url);
         if (!streams.length) setMessage("该剧集没有公开可识别的播放地址");
@@ -363,6 +378,8 @@ export default function SourceHub() {
     setSelected(null);
     setActiveEpisode(null);
     setEpisodes([]);
+    setIkanbotLines([]);
+    setIkanbotLine(0);
     setMedia([]);
     setMessage("");
     scrollToHubTop();
@@ -422,7 +439,7 @@ export default function SourceHub() {
         <option value="all">全部已启用网站</option>
         {sources.filter((s) => s.enabled).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select>
-      <div className="text-[11px] text-mut">仅搜索已验证的视频源。Kubb TV 提供公开免费线路；VIP 清晰度不支持绕过授权。</div>
+      <div className="text-[11px] text-mut">努努与 Kubb 支持播放和离线；爱看机器人目前仅测试原生在线播放，不提供下载。</div>
       {Object.keys(statuses).length > 0 && <div className="rounded-(--r-md) bg-s2 p-3 space-y-1">
         {sources.filter((s) => !!statuses[s.id]).map((s) => <div key={s.id} className="text-[11px] text-mut">
           <span className="text-on">{s.name}</span> · {statuses[s.id].state === "searching" ? "搜索中" :
@@ -447,9 +464,20 @@ export default function SourceHub() {
         <div className="font-semibold text-[17px]">{selected.title}</div>
         <div className="text-[11px] text-mut">{selected.sourceName}{selected.sourceId === "nnyy" ? " · 已支持公开选集接口" : ""}</div>
         {selected.sourceId === "ikanbot" && <div className="rounded-(--r-sm) bg-s3 p-3 space-y-2">
-          <div className="text-[12px] font-semibold">iKanBot 的播放需要网站动态授权</div>
-          <div className="text-[11px] text-mut">已确认其网页播放器使用带 token 的接口加载视频，并设置 SAMEORIGIN 禁止跨网站嵌入。此版本可展示搜索结果，但尚未获得能在本 App 内稳定播放的授权接口。</div>
-
+          <div className="text-[12px] font-semibold">爱看机器人 · 原生播放测试</div>
+          <div className="text-[11px] text-mut">读取该网站公开网页的播放线路，使用 MyVideo 原生 HLS 播放器。此来源暂不支持下载；如线路失效可切换线路重新播放。</div>
+        </div>}
+        {selected.sourceId === "ikanbot" && ikanbotLines.length > 0 && <div className="space-y-2">
+          <div className="text-[12px] font-semibold">播放线路（{ikanbotLines.length}）</div>
+          <div className="flex gap-2 overflow-x-auto pb-2">{ikanbotLines.map((line, index) =>
+            <button type="button" key={index} className={btn + " shrink-0" + (ikanbotLine === index ? " bg-primary text-on-primary" : "")}
+              onClick={() => {
+                setIkanbotLine(index);
+                setEpisodes(line.episodes);
+                setActiveEpisode(null);
+                setMedia([]);
+                setMessage("");
+              }}>{line.name}</button>)}</div>
         </div>}
 
         {episodes.length > 0 && <div className="space-y-2">
@@ -464,9 +492,9 @@ export default function SourceHub() {
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
             <EmbeddedVideo key={m.url + "|" + (activeEpisode?.url || "")} media={m}
               adMarkerKey={selected.sourceId === "nnyy" ? "nnyy|" + (activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title) : undefined} />
-            {(m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
+            {selected.sourceId !== "ikanbot" && (m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
               onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频（支持续传）"}</button>}
-            {m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
+            {selected.sourceId !== "ikanbot" && m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
           </div>) : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
 
       </div>}
