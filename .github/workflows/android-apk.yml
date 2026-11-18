@@ -10,6 +10,7 @@ on:
       - "src-tauri/**"
       - "package.json"
       - "pnpm-lock.yaml"
+      - "scripts/check-myvideo-isolation.mjs"
 
 permissions:
   contents: read
@@ -78,6 +79,9 @@ jobs:
 
       - name: Build debug APK (automatically test-signed)
         run: pnpm tauri android build --apk --debug --target aarch64
+
+      - name: Verify no legacy API in packaged frontend
+        run: node scripts/check-myvideo-isolation.mjs
 
       - name: Collect APK
         shell: bash
