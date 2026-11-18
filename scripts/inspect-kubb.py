@@ -496,3 +496,39 @@ try:
  for m in list(re.finditer(r'id="e_token"|get_tks|mtype|videoId',html,re.I))[:8]:
   print("IKANBOT_PAGE_ATTR_CONTEXT",repr(re.sub(r'value="[^"]{20,}"','value="[redacted]"',html[max(0,m.start()-100):m.end()+120])[:260]),flush=True)
 except Exception as e:print("IKANBOT_INPUT_ERROR",type(e).__name__,str(e)[:140],flush=True)
+
+
+# Verify the site's own documented-in-page token derivation, without exposing token or video URLs.
+print("==== IKANBOT PAGE-DERIVED TOKEN REQUEST",flush=True)
+try:
+ with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/play/442095",headers=HEADERS),timeout=12) as res:
+  html=res.read(190000).decode("utf-8","replace")
+ fields={}
+ for m in re.finditer(r'<input\b[^>]*>',html,re.I):
+  attrs=dict(re.findall(r'([\w-]+)\s*=\s*["\x27]([^"\x27]*)["\x27]',m.group()))
+  if attrs.get("id") in ("current_id","e_token","mtype"):fields[attrs["id"]]=attrs.get("value","")
+ if not all(fields.values()):raise ValueError("Player missing required hidden fields")
+ code=fields["current_id"][-4:]
+ src=fields["e_token"]
+ parts=[]
+ for digit in code:
+  n=int(digit)%3+1
+  parts.append(src[n:n+8]);src=src[n+8:]
+ token="".join(parts)
+ url="https://www1.ikanbot.com/api/getResN?"+urlencode({"videoId":fields["current_id"],"mtype":fields["mtype"],"token":token})
+ request=urllib.request.Request(url,headers={**HEADERS,"Accept":"application/json","Referer":"https://www1.ikanbot.com/play/442095"})
+ with urllib.request.urlopen(request,timeout=12) as response:
+  data=json.loads(response.read(400000))
+ groups=(data.get("data") or {}).get("list",[])
+ output={"http":response.status,"state":data.get("state"),"mtype":fields["mtype"],"token_len":len(token),
+         "groups":len(groups) if isinstance(groups,list) else None}
+ print("IKANBOT_TOKEN_API",json.dumps(output,ensure_ascii=False),flush=True)
+ for i,item in enumerate(groups[:3] if isinstance(groups,list) else []):
+  if not isinstance(item,dict):continue
+  shape={}
+  for key,val in item.items():
+   if isinstance(val,str):shape[key]={"type":"str","size":len(val),"segments":val.count("#"),"hls_count":val.lower().count("m3u8")}
+   elif isinstance(val,list):shape[key]={"type":"list","size":len(val)}
+   else:shape[key]={"type":type(val).__name__}
+  print("IKANBOT_TOKEN_GROUP_SHAPE",json.dumps({"index":i,"shape":shape},ensure_ascii=False),flush=True)
+except Exception as e:print("IKANBOT_TOKEN_API_ERROR",type(e).__name__,str(e)[:160],flush=True)
