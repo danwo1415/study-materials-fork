@@ -42,31 +42,18 @@ const KEY = "myvideo-multi-sources-v1";
  * Filter persisted V2 configs too, otherwise existing installations keep it.
  */
 export function isExcludedHubSource(source: Pick<HubSource, "id" | "homepage">): boolean {
-  if (source.id === "ikanbot") return true;
-  try {
-    const host = new URL(source.homepage).hostname.toLowerCase();
-    return host === "ikanbot.com" || host.endsWith(".ikanbot.com");
-  } catch {
-    return false;
-  }
+  // A site enters the active catalog only after search + in-app playback
+  // + offline download have been verified. Keep old saved sites hidden.
+  return source.id !== "nnyy";
 }
 
-const defaultSites: HubSource[] = videoSourceCandidates.filter((s) => !isExcludedHubSource(s)).map((s) => ({
+const defaultSites: HubSource[] = videoSourceCandidates.map((s) => ({
   id: s.id,
   name: s.name,
   homepage: s.homepage,
-  // These templates are hypotheses for user testing, not validated site endpoints.
-  searchTemplate: s.id === "ikanbot"
-    ? "https://www1.ikanbot.com/search?q={query}"
-    : s.id === "bandai-channel"
-      ? "https://www.b-ch.com/search/?search_txt={query}"
-      : s.id === "dm84"
-        ? "https://dm84.tv/s----------.html?wd={query}"
-        : s.id === "nnyy"
-          ? "https://nnyy.in/so?q={query}"
-          : new URL("?s={query}", s.homepage).href.replace("%7Bquery%7D", "{query}"),
-  enabled: s.id === "nnyy", // Only the video source verified to search, play and download is on by default.
-  configured: ["bandai-channel", "dm84", "nnyy"].includes(s.id),
+  searchTemplate: "https://nnyy.in/so?q={query}",
+  enabled: true,
+  configured: true,
 }));
 
 export function readHubSources(): HubSource[] {
@@ -110,20 +97,8 @@ function requirePublicHttps(raw: string): URL {
   return u;
 }
 
-export function makeHubSource(url: string): HubSource {
-  const u = requirePublicHttps(url.trim());
-  const home = u.origin + "/";
-  if (isExcludedHubSource({ id: "", homepage: home })) {
-    throw new Error("iKanBot 尚未实现并验证搜索、App 内播放与下载，按要求不纳入视频源");
-  }
-  return {
-    id: "custom-" + Date.now().toString(36),
-    name: u.hostname,
-    homepage: home,
-    searchTemplate: home + "?s={query}",
-    enabled: true,
-    configured: false,
-  };
+export function makeHubSource(_url: string): HubSource {
+  throw new Error("新增网站需要先完成搜索、APP 内播放及离线下载验证，暂不可直接添加");
 }
 
 export function validateSource(source: HubSource): void {
