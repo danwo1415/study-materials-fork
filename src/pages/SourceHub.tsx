@@ -4,10 +4,10 @@ import { listen } from "@tauri-apps/api/event";
 // Standalone playback origin; there is no Huangguo API import in MyVideo.
 const LOCAL = /Android|Windows/i.test(navigator.userAgent) ? "http://hg.localhost" : "hg://localhost";
 import {
-  type HubDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
+  type HubDownload, type HubPendingDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
   readHubSources, saveHubSources, searchPublicSite,
   fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, listHubDownloads,
-  downloadHubMedia, downloadHubHls, deleteHubDownload,
+  downloadHubMedia, downloadHubHls, deleteHubDownload, listHubPending, discardHubPending, pauseHubDownload,
   NNY_CATEGORIES, fetchNnyCatalog, type NnyCategory, type NnySort, type NnyGenre,
   fetchKubbDetail, fetchKubbEpisode,
 } from "../sourceHub";
@@ -144,6 +144,7 @@ export default function SourceHub() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [downloads, setDownloads] = useState<HubDownload[]>([]);
+  const [pending, setPending] = useState<HubPendingDownload[]>([]);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState("");
   const [view, setView] = useState<"categories" | "search" | "downloads">("categories");
@@ -166,6 +167,7 @@ export default function SourceHub() {
   useEffect(() => { saveHubSources(sources); }, [sources]);
   useEffect(() => {
     void listHubDownloads().then(setDownloads).catch(() => {});
+    void listHubPending().then(setPending).catch(() => {});
     let unlisten: (() => void) | undefined;
     void listen<{ received: number; total: number | null; completedParts?: number; totalParts?: number }>("hub-download-progress", (event) => {
       const { received, total, completedParts, totalParts } = event.payload;
@@ -274,20 +276,72 @@ export default function SourceHub() {
     finally { setDetailLoading(false); }
   };
 
-  const download = async (item: HubMedia) => {
-    if (!selected || item.type === "embed") return;
+  const refreshPending = async () => {
+    try { setPending(await listHubPending()); } catch { /* keep last known state */ }
+  };
+
+  const transfer = async (url: string, kind: "mp4" | "webm" | "hls", title: string, key: string) => {
     setDownloading(true);
-    setDownloadProgress("开始下载");
+    setDownloadProgress("正在连接…");
     setMessage("");
     try {
-      const fullTitle = activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title;
-      const saved = item.type === "hls"
-        ? await downloadHubHls(item.url, fullTitle)
-        : await downloadHubMedia(item.url, fullTitle);
-      setDownloads((prev) => [...prev, saved]);
-      setMessage("已下载到 App 私有目录，可在「离线」查看");
+      const saved = kind === "hls"
+        ? await downloadHubHls(url, title, key)
+        : await downloadHubMedia(url, title, key);
+      setDownloads((prev) => [...prev.filter((x) => x.id !== saved.id), saved]);
+      setMessage("已保存完整视频，可在「离线」播放");
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setDownloading(false);
+      await refreshPending();
+    }
+  };
+
+  const download = async (item: HubMedia) => {
+    if (!selected || item.type === "embed" || downloading) return;
+    const fullTitle = activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title;
+    // Stable identity is the source and episode, not a signed CDN URL.
+    const key = JSON.stringify({
+      sourceId: selected.sourceId,
+      episodeUrl: activeEpisode?.url || selected.url,
+      kind: item.type,
+      line: media.findIndex((track) => track.url === item.url && track.type === item.type),
+    });
+    await transfer(item.url, item.type, fullTitle, key);
+  };
+
+  const resume = async (item: HubPendingDownload) => {
+    if (downloading) return;
+    let mediaUrl = item.sourceUrl;
+    try {
+      const ref = JSON.parse(item.key) as {
+        sourceId?: string; episodeUrl?: string; kind?: string; line?: number;
+      };
+      if (typeof ref.episodeUrl === "string") {
+        let options: HubMedia[] = [];
+        if (ref.sourceId === "kubb") {
+          options = await fetchKubbEpisode(ref.episodeUrl);
+        } else if (ref.sourceId === "nnyy" && /\/_gp\//.test(ref.episodeUrl)) {
+          options = await fetchNnyyEpisode(ref.episodeUrl);
+        }
+        if (options.length) {
+          const index = typeof ref.line === "number" && ref.line >= 0 ? ref.line : 0;
+          const line = options[index] || options[0];
+          if (line.type === item.kind) mediaUrl = line.url;
+        }
+      }
+    } catch { /* old or temporary source: use the original URL */ }
+    await transfer(mediaUrl, item.kind, item.title, item.key);
+  };
+
+  const discard = async (id: string) => {
+    if (downloading) return;
+    try {
+      await discardHubPending(id);
+      await refreshPending();
+      setMessage("已删除未完成的下载文件");
     } catch (e) { setMessage((e as Error).message); }
-    finally { setDownloading(false); }
   };
 
   const removeDownload = async (id: string) => {
@@ -312,7 +366,7 @@ export default function SourceHub() {
     <div className="flex gap-2 flex-wrap">
       <button className={btn + (view === "categories" ? " bg-primary text-on-primary" : "")} onClick={() => setView("categories")}>分类</button>
       <button className={btn + (view === "search" ? " bg-primary text-on-primary" : "")} onClick={() => setView("search")}>聚合搜索</button>
-      <button className={btn + (view === "downloads" ? " bg-primary text-on-primary" : "")} onClick={() => setView("downloads")}>离线 ({downloads.length})</button>
+      <button className={btn + (view === "downloads" ? " bg-primary text-on-primary" : "")} onClick={() => { setView("downloads"); void refreshPending(); }}>离线 ({downloads.length}{pending.length ? " + " + pending.length : ""})</button>
     </div>
     {view === "categories" && <div className="space-y-3">
       <div className="text-[13px] font-semibold">努努影院 · 分类浏览</div>
@@ -403,7 +457,7 @@ export default function SourceHub() {
             <EmbeddedVideo key={m.url + "|" + (activeEpisode?.url || "")} media={m}
               adMarkerKey={selected.sourceId === "nnyy" ? "nnyy|" + (activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title) : undefined} />
             {(m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
-              onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频"}</button>}
+              onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频（支持续传）"}</button>}
             {m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
           </div>) : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
 
@@ -412,7 +466,24 @@ export default function SourceHub() {
         <p className="text-[12px] text-mut">未找到候选结果。可到「管理网站」中调整搜索规则，或使用原网站搜索。</p>}
     </>}
     {view === "downloads" && <div className="space-y-2">
-      <div className="text-[12px] text-mut">MP4、WebM 与普通 HLS 均保存在 MyVideo 私有目录。卸载 MyVideo 可能删除这些文件。</div>
+      <div className="text-[12px] text-mut">下载中断后，已完成的 HLS 分片或 MP4 部分数据会留在本机；点击「继续」可续传。卸载 MyVideo 仍可能删除文件。</div>
+      {downloading && <div className="rounded-(--r-md) bg-s2 p-3 flex items-center justify-between gap-2">
+        <span className="text-[12px]">下载中：{downloadProgress}</span>
+        <button className={btn} onClick={() => { void pauseHubDownload(); }}>暂停下载</button>
+      </div>}
+      {pending.map((task) => <div key={task.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
+        <div className="text-[13px] font-semibold break-words">{task.title}</div>
+        <div className="text-[11px] text-mut">
+          已保存 {(task.received / 1048576).toFixed(1)} MB
+          {task.total ? " / " + (task.total / 1048576).toFixed(1) + " MB" : ""}
+          {task.totalParts ? " · " + (task.completedParts || 0) + "/" + task.totalParts + " 片" : ""}
+        </div>
+        <div className="flex gap-2">
+          <button className={btn + " bg-primary text-on-primary"} disabled={downloading}
+            onClick={() => { void resume(task); }}>继续下载</button>
+          <button className={btn} disabled={downloading} onClick={() => { void discard(task.id); }}>删除任务</button>
+        </div>
+      </div>)}
       {downloads.length ? downloads.map((d) => <div key={d.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
         <div className="text-[13px] font-semibold">{d.title}</div>
         <div className="text-[11px] text-mut">{(d.bytes / 1048576).toFixed(1)} MB</div>
