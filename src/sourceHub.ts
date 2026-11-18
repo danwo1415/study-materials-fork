@@ -25,6 +25,11 @@ export type HubMedia = {
   type: "mp4" | "webm" | "hls" | "embed";
 };
 
+export type IkanbotLine = { name: string; episodes: HubEpisode[] };
+export type IkanbotCatalog = { title: string; lines: IkanbotLine[] };
+export const fetchIkanbotCatalog = (url: string) =>
+  invoke<IkanbotCatalog>("hub_ikanbot_catalog", { url });
+
 export type HubDownload = {
   id: string;
   title: string;
@@ -54,9 +59,9 @@ const KEY = "myvideo-multi-sources-v1";
  * Filter persisted V2 configs too, otherwise existing installations keep it.
  */
 export function isExcludedHubSource(source: Pick<HubSource, "id" | "homepage">): boolean {
-  // A site enters the active catalog only after search + in-app playback
-  // + offline download have been verified. Keep old saved sites hidden.
-  return source.id !== "nnyy" && source.id !== "kubb";
+  // Ikanbot is separately labeled playback beta; offline downloads stay disabled.
+  // Keep unsupported old sources hidden.
+  return source.id !== "nnyy" && source.id !== "kubb" && source.id !== "ikanbot";
 }
 
 const defaultSites: HubSource[] = videoSourceCandidates.map((s) => ({
@@ -65,6 +70,8 @@ const defaultSites: HubSource[] = videoSourceCandidates.map((s) => ({
   homepage: s.homepage,
   searchTemplate: s.id === "kubb"
     ? "https://api.kubb.tv/api/List/GetTitleGetData?SearchCriteria={query}"
+    : s.id === "ikanbot"
+    ? "https://www1.ikanbot.com/search?q={query}"
     : "https://nnyy.in/so?q={query}",
   enabled: true,
   configured: true,
@@ -83,8 +90,8 @@ export function readHubSources(): HubSource[] {
         ...arr.map((x) => {
           const builtin = defaultSites.find((d) => d.id === x.id);
           // Migrate old untested generic guesses to verified search paths.
-          if (builtin?.configured && !x.configured &&
-              (x.searchTemplate.endsWith("/?s={query}") ||
+          if (builtin?.configured && (!x.configured || x.id === "ikanbot") &&
+              (x.id === "ikanbot" || x.searchTemplate.endsWith("/?s={query}") ||
                x.searchTemplate.endsWith("?s={query}"))) {
             return { ...x, searchTemplate: builtin.searchTemplate, configured: true };
           }
