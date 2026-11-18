@@ -532,3 +532,31 @@ try:
    else:shape[key]={"type":type(val).__name__}
   print("IKANBOT_TOKEN_GROUP_SHAPE",json.dumps({"index":i,"shape":shape},ensure_ascii=False),flush=True)
 except Exception as e:print("IKANBOT_TOKEN_API_ERROR",type(e).__name__,str(e)[:160],flush=True)
+
+
+# Inspect line/episode delimiters of authorized anonymous response; never print stream URLs.
+print("==== IKANBOT PUBLIC EPISODE FORMAT",flush=True)
+try:
+ with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/play/442095",headers=HEADERS),timeout=12) as res:
+  html=res.read(180000).decode("utf-8","replace")
+ fields={}
+ for m in re.finditer(r'<input\b[^>]*>',html,re.I):
+  attrs=dict(re.findall(r'([\w-]+)\s*=\s*["\x27]([^"\x27]*)["\x27]',m.group()))
+  if attrs.get("id") in ("current_id","e_token","mtype"):fields[attrs["id"]]=attrs.get("value","")
+ rest=fields["e_token"];parts=[]
+ for digit in fields["current_id"][-4:]:
+  n=int(digit)%3+1;parts.append(rest[n:n+8]);rest=rest[n+8:]
+ token="".join(parts)
+ uri="https://www1.ikanbot.com/api/getResN?"+urlencode({"videoId":fields["current_id"],"mtype":fields["mtype"],"token":token})
+ with urllib.request.urlopen(urllib.request.Request(uri,headers={**HEADERS,"Referer":"https://www1.ikanbot.com/play/442095"}),timeout=12) as resp:
+  groups=json.load(resp)["data"]["list"]
+ for idx,g in enumerate(groups[:3]):
+  res_data=g.get("resData","")
+  sections=res_data.split("#")
+  samples=[]
+  for piece in sections[:4]:
+   a,b=piece.split("$",1) if "$" in piece else (piece,"")
+   samples.append({"label":a[:24],"has_url":bool(b),"url_kind":"hls" if ".m3u8" in b.lower() else ("other" if b else "none"),"trailing_hls":b.lower().endswith(".m3u8")})
+  print("IKANBOT_FORMAT",json.dumps({"line":idx,"pieces":len(sections),"samples":samples,"siteId":g.get("siteId")},ensure_ascii=False),flush=True)
+except Exception as e:
+ print("IKANBOT_FORMAT_ERROR",type(e).__name__,str(e)[:160],flush=True)
