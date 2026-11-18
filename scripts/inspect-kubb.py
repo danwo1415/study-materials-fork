@@ -233,3 +233,19 @@ try:
             "lines":len(raw.splitlines()),"segments":sum(1 for x in raw.splitlines() if x and not x.startswith("#")),
             "discontinuities":raw.count("#EXT-X-DISCONTINUITY"),"master":"#EXT-X-STREAM-INF" in raw},ensure_ascii=False),flush=True)
 except Exception as e:print("KUBB_HLS_ERROR",type(e).__name__,str(e)[:130],flush=True)
+
+# Confirm public search and stream requests work without user headers or login.
+for endpoint, params in [
+ ("/api/List/GetTitleGetData", {"SearchCriteria":"公民义警"}),
+ ("/api/List/GetTitleGetData", {"SearchCriteria":"犬夜叉"}),
+ ("/api/Video/getPlayData", {"mediaKey":"qVyzCcnhWtG"})
+]:
+ url="https://api.kubb.tv"+endpoint+"?"+urlencode(params)
+ try:
+  req=urllib.request.Request(url,headers={"User-Agent":HEADERS["User-Agent"],"Accept":"application/json"})
+  with urllib.request.urlopen(req,timeout=12) as response:
+   obj=json.loads(response.read(50000))
+  data=obj.get("data",{})
+  items=data.get("list",[])
+  print("KUBB_NOAUTH_JSON",endpoint,"q",list(params.values())[0],"ret",obj.get("ret"),"n",len(items),"first",repr(summarize_response(items[0]))[:2400] if items else None,flush=True)
+ except Exception as e: print("KUBB_NOAUTH_ERROR",endpoint,type(e).__name__,str(e)[:150],flush=True)
