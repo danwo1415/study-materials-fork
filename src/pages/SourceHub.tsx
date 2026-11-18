@@ -9,6 +9,7 @@ import {
   fetchHubHtml, findDirectMedia, findAllowedSiteEmbeds, findPublicEpisodes, fetchNnyyEpisode, listHubDownloads,
   downloadHubMedia, downloadHubHls, deleteHubDownload,
   NNY_CATEGORIES, fetchNnyCatalog, type NnyCategory, type NnySort, type NnyGenre,
+  fetchKubbDetail, fetchKubbEpisode,
 } from "../sourceHub";
 
 type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: string };
@@ -239,9 +240,16 @@ export default function SourceHub() {
     setDetailLoading(true);
     setMessage("");
     try {
-      const html = await fetchHubHtml(result.url);
-      setMedia(findDirectMedia(html, result.url));
-      setEpisodes(findPublicEpisodes(html, result.url, result.sourceId));
+      if (result.sourceId === "kubb") {
+        const detail = await fetchKubbDetail(result.url);
+        setMedia([]);
+        setEpisodes(detail.episodes);
+        if (!detail.episodes.length) setMessage("Kubb 暂时没有可供匿名播放的免费线路；VIP 内容不会绕过授权。");
+      } else {
+        const html = await fetchHubHtml(result.url);
+        setMedia(findDirectMedia(html, result.url));
+        setEpisodes(findPublicEpisodes(html, result.url, result.sourceId));
+      }
     } catch (e) { setMessage((e as Error).message); }
     finally { setDetailLoading(false); }
   };
@@ -252,7 +260,9 @@ export default function SourceHub() {
     setDetailLoading(true);
     setMessage("");
     try {
-      if (selected?.sourceId === "nnyy" && new URL(ep.url).pathname.startsWith("/_gp/")) {
+      if (selected?.sourceId === "kubb") {
+        setMedia(await fetchKubbEpisode(ep.url));
+      } else if (selected?.sourceId === "nnyy" && new URL(ep.url).pathname.startsWith("/_gp/")) {
         const streams = await fetchNnyyEpisode(ep.url);
         if (!streams.length) setMessage("该剧集没有公开可识别的播放地址");
         setMedia(streams);
@@ -350,7 +360,7 @@ export default function SourceHub() {
         <option value="all">全部已启用网站</option>
         {sources.filter((s) => s.enabled).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select>
-      <div className="text-[11px] text-mut">搜索依赖各网站的公开网页结构；未验证的网站可能没有结果。示例视频不是搜索范围限制。</div>
+      <div className="text-[11px] text-mut">仅搜索已验证的视频源。Kubb TV 提供公开免费线路；VIP 清晰度不支持绕过授权。</div>
       {Object.keys(statuses).length > 0 && <div className="rounded-(--r-md) bg-s2 p-3 space-y-1">
         {sources.filter((s) => !!statuses[s.id]).map((s) => <div key={s.id} className="text-[11px] text-mut">
           <span className="text-on">{s.name}</span> · {statuses[s.id].state === "searching" ? "搜索中" :
