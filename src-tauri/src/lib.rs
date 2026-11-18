@@ -63,6 +63,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             source_hub::hub_fetch_html,
             source_hub::hub_fetch_public_json,
+            source_hub::hub_ikanbot_catalog,
             source_hub::hub_download_media,
             source_hub::hub_download_hls,
             source_hub::hub_list_downloads,
