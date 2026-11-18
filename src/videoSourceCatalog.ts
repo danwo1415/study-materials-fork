@@ -5,7 +5,7 @@ export type VideoSourceCandidate = {
   homepage: string;
   exampleUrl: string;
   category: "anime" | "film-tv" | "documentary";
-  integrationStatus: "verified";
+  integrationStatus: "verified" | "playback-beta";
 };
 export const videoSourceCandidates: readonly VideoSourceCandidate[] = [
   {
@@ -23,5 +23,13 @@ export const videoSourceCandidates: readonly VideoSourceCandidate[] = [
     exampleUrl: "https://m.kubb.tv/play/qVyzCcnhWtG",
     category: "film-tv",
     integrationStatus: "verified",
+  },
+  {
+    id: "ikanbot",
+    name: "爱看机器人 · 播放测试",
+    homepage: "https://www1.ikanbot.com/",
+    exampleUrl: "https://www1.ikanbot.com/play/442095",
+    category: "anime",
+    integrationStatus: "playback-beta",
   },
 ];
