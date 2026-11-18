@@ -56,6 +56,15 @@ for source in SITES:
                         if not parsed.scheme == "https" or not parsed.hostname or not parsed.hostname.endswith("kubb.tv"): continue
                         with urllib.request.urlopen(urllib.request.Request(js,headers=HEADERS),timeout=12) as jresp:
                             data = jresp.read(450000).decode("utf-8","replace")
+                        if parsed.path.startswith("/script/app."):
+                            print("KUBB_JS_HEADER", data[:650])
+                            for pattern in ("baseURL", "/api/List/", "/api/Video/", "/api/home/", "search", "Search", "/play/", "playInfo", "playUrl", "videoUrl", "GetPlay", "getPlay", "m3u8", "getVideo", "GetVideo", "GetMovie", "getmovie", "videoInfo", "request", "GetMovieInfo"):
+                                found = list(re.finditer(re.escape(pattern), data, re.I))
+                                print("KUBB_CONTEXT", pattern, "hits", len(found))
+                                for match in found[:3]:
+                                    print("KUBB_CHUNK", repr(data[max(0, match.start()-280):min(len(data), match.end()+440)]))
+                            hosts = list(dict.fromkeys(re.findall(r"https?://[a-z0-9.:-]+",data,re.I)))
+                            print("KUBB_PUBLIC_HOSTS",hosts[:30])
                         api_paths = list(dict.fromkeys(re.findall(r"[/][a-zA-Z0-9_/-]*(?:search|play|video|media|episode|source|stream)[a-zA-Z0-9_/?=&.-]*",data,re.I)))
                         print("public_script",json.dumps({"path":parsed.path[-100:],"bytes_sampled":len(data),"api_path_shapes":[p[:130] for p in api_paths[:20]],
                           "uses_hls":"m3u8" in data.lower(),"uses_drm":any(x in data.lower() for x in ("widevine","licenseurl","eme")),
