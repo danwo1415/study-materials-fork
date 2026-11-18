@@ -357,3 +357,29 @@ for site in ["https://www1.ikanbot.com/play/442095","https://www1.ikanbot.com/"]
     print("IKANBOT_JS_ERROR",uri.path[-60:],type(e).__name__,str(e)[:100],flush=True)
  except Exception as e:
   print("IKANBOT_ERROR",site,type(e).__name__,str(e)[:180],flush=True)
+
+
+# Ikanbot parser diagnostics: safe code excerpts, redact actual URLs and tokens.
+print("==== IKANBOT PLAYER CONTRACT",flush=True)
+try:
+ page_url="https://www1.ikanbot.com/play/442095"
+ with urllib.request.urlopen(urllib.request.Request(page_url,headers=HEADERS),timeout=12) as resp:
+  page=resp.read(180000).decode("utf-8","replace")
+ with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/resources/play_new.js",headers=HEADERS),timeout=12) as resp:
+  script=resp.read(180000).decode("utf-8","replace")
+ for term in ["/api/getResN","getResN","playUrl","videojs","sources:","source:","/api/","m3u8","$.post","$.get","fetch(","POST","GET"]:
+  locations=[m.start() for m in re.finditer(re.escape(term),script,re.I)]
+  print("IKANBOT_JS_TERM",term,len(locations),flush=True)
+  for pos in locations[:3]:
+   snippet=script[max(0,pos-360):min(len(script),pos+500)]
+   snippet=re.sub(r'https?://[^\s"\'<>]+', '[REMOTE_URL]',snippet)
+   print("IKANBOT_JS_CONTEXT",term,repr(snippet[:900]),flush=True)
+ for term in ["<video","data-","getResN","play_new.js","source","playId","vodId","episode","第1集","选集"]:
+  locations=[m.start() for m in re.finditer(re.escape(term),page,re.I)]
+  print("IKANBOT_HTML_TERM",term,len(locations),flush=True)
+  for pos in locations[:3]:
+   snippet=page[max(0,pos-250):min(len(page),pos+450)]
+   snippet=re.sub(r'https?://[^\s"\'<>]+','[REMOTE_URL]',snippet)
+   print("IKANBOT_HTML_CONTEXT",term,repr(snippet[:850]),flush=True)
+except Exception as e:
+ print("IKANBOT_CONTRACT_ERROR",type(e).__name__,str(e)[:150],flush=True)
