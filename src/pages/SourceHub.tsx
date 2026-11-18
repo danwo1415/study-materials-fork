@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import { listen } from "@tauri-apps/api/event";
-import { api, LOCAL } from "../api";
+// Standalone playback origin; there is no Huangguo API import in MyVideo.
+const LOCAL = /Android|Windows/i.test(navigator.userAgent) ? "http://hg.localhost" : "hg://localhost";
 import {
   type HubDownload, type HubMedia, type HubResult, type HubSource, type HubEpisode,
   makeHubSource, readHubSources, saveHubSources, searchPublicSite, discoverSearchTemplate,
@@ -336,7 +337,7 @@ export default function SourceHub() {
         {selected.sourceId === "ikanbot" && <div className="rounded-(--r-sm) bg-s3 p-3 space-y-2">
           <div className="text-[12px] font-semibold">iKanBot 的播放需要网站动态授权</div>
           <div className="text-[11px] text-mut">已确认其网页播放器使用带 token 的接口加载视频，并设置 SAMEORIGIN 禁止跨网站嵌入。此版本可展示搜索结果，但尚未获得能在本 App 内稳定播放的授权接口。</div>
-          <button type="button" className={btn} onClick={() => { void api.openUrl(selected.url); }}>前往 iKanBot 原站播放</button>
+
         </div>}
 
         {episodes.length > 0 && <div className="space-y-2">
@@ -355,8 +356,7 @@ export default function SourceHub() {
               onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频"}</button>}
             {m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
           </div>) : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
-        {activeEpisode && <button className={btn} onClick={() => { void api.openUrl(activeEpisode.url); }}>在原网站打开当前剧集</button>}
-        <button className={btn} onClick={() => { void api.openUrl(selected.url); }}>在原网站打开详情</button>
+
       </div>}
       {!selected && !searching && !results.length && query.trim() && Object.keys(statuses).length > 0 &&
         <p className="text-[12px] text-mut">未找到候选结果。可到「管理网站」中调整搜索规则，或使用原网站搜索。</p>}
@@ -401,7 +401,7 @@ export default function SourceHub() {
       </div>)}
     </>}
     {view === "downloads" && <div className="space-y-2">
-      <div className="text-[12px] text-mut">完成下载的 MP4/WebM 保存在 App 私有目录，可离线播放。卸载 App 可能删除这些文件。</div>
+      <div className="text-[12px] text-mut">MP4、WebM 与普通 HLS 均保存在 MyVideo 私有目录。卸载 MyVideo 可能删除这些文件。</div>
       {downloads.length ? downloads.map((d) => <div key={d.id} className="rounded-(--r-md) bg-s2 p-3 space-y-2">
         <div className="text-[13px] font-semibold">{d.title}</div>
         <div className="text-[11px] text-mut">{(d.bytes / 1048576).toFixed(1)} MB</div>
@@ -410,7 +410,7 @@ export default function SourceHub() {
           ? { url: LOCAL + "/offline-hls?id=" + encodeURIComponent(d.id) + "&file=index.m3u8", type: "offline-hls" }
           : { url: LOCAL + "/offline?id=" + encodeURIComponent(d.id), type: "offline" }} />
         <button className={btn} onClick={() => { void removeDownload(d.id); }}>删除本地文件</button>
-      </div>) : <div className="text-[12px] text-mut">还没有离线视频。先在聚合搜索里找到可直接下载的 MP4/WebM。</div>}
+      </div>) : <div className="text-[12px] text-mut">还没有离线视频。先搜索作品并选择允许下载的播放线路。</div>}
     </div>}
     {message && <p className="text-[12px] rounded-(--r-md) bg-s3 p-3 break-words">{message}</p>}
   </div>;
