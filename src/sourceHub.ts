@@ -65,8 +65,8 @@ const defaultSites: HubSource[] = videoSourceCandidates.filter((s) => !isExclude
         : s.id === "nnyy"
           ? "https://nnyy.in/so?q={query}"
           : new URL("?s={query}", s.homepage).href.replace("%7Bquery%7D", "{query}"),
-  enabled: true,
-  configured: ["ikanbot", "bandai-channel", "dm84", "nnyy"].includes(s.id),
+  enabled: s.id === "nnyy", // Only the video source verified to search, play and download is on by default.
+  configured: ["bandai-channel", "dm84", "nnyy"].includes(s.id),
 }));
 
 export function readHubSources(): HubSource[] {
