@@ -560,3 +560,32 @@ try:
   print("IKANBOT_FORMAT",json.dumps({"line":idx,"pieces":len(sections),"samples":samples,"siteId":g.get("siteId")},ensure_ascii=False),flush=True)
 except Exception as e:
  print("IKANBOT_FORMAT_ERROR",type(e).__name__,str(e)[:160],flush=True)
+
+
+# Verify native HLS proxy can reach an actual public playlist; fetch playlist TEXT only.
+print("==== IKANBOT NATIVE HLS PLAYLIST CHECK",flush=True)
+try:
+ with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/play/442095",headers=HEADERS),timeout=12) as r:
+  html=r.read(180000).decode("utf-8","replace")
+ fields={}
+ for m in re.finditer(r'<input\b[^>]*>',html,re.I):
+  attrs=dict(re.findall(r'([\w-]+)\s*=\s*["\x27]([^"\x27]*)["\x27]',m.group()))
+  if attrs.get("id") in ("current_id","e_token","mtype"): fields[attrs["id"]]=attrs.get("value","")
+ rest=fields["e_token"]; parts=[]
+ for ch in fields["current_id"][-4:]:
+  n=int(ch)%3+1;parts.append(rest[n:n+8]);rest=rest[n+8:]
+ api="https://www1.ikanbot.com/api/getResN?"+urlencode({"videoId":fields["current_id"],"mtype":fields["mtype"],"token":"".join(parts)})
+ with urllib.request.urlopen(urllib.request.Request(api,headers={**HEADERS,"Referer":"https://www1.ikanbot.com/play/442095"}),timeout=12) as r: data=json.load(r)
+ group=data["data"]["list"][0]
+ tracks=json.loads(group["resData"])
+ episode=tracks[0]["url"].split("#")[0].split("$",1)
+ stream_url=episode[1] if len(episode)==2 else ""
+ if not stream_url.startswith("https://") or ".m3u8" not in stream_url.lower(): raise ValueError("no valid stream")
+ with urllib.request.urlopen(urllib.request.Request(stream_url,headers={"User-Agent":HEADERS["User-Agent"],"Accept":"*/*"}),timeout=15) as r:
+  body=r.read(65536)
+  print("IKANBOT_MANIFEST_RESULT",json.dumps({"status":r.status,"mime":r.headers.get("Content-Type"),"size_sample":len(body),
+   "valid_hls":body.lstrip(b"\xef\xbb\xbf").startswith(b"#EXTM3U"),
+   "is_master":b"#EXT-X-STREAM-INF" in body,
+   "drm_directive":b"#EXT-X-KEY:" in body,
+   "seg_count_in_sample":sum(1 for line in body.splitlines() if line.strip() and not line.startswith(b"#"))},ensure_ascii=False),flush=True)
+except Exception as e:print("IKANBOT_MANIFEST_RESULT_ERROR",type(e).__name__,str(e)[:155],flush=True)
