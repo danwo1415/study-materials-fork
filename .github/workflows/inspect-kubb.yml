@@ -1,0 +1,18 @@
+name: Inspect Kubb public site
+on:
+  push:
+    branches: [myvideo]
+    paths:
+      - "scripts/inspect-kubb.py"
+      - ".github/workflows/inspect-kubb.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    name: Inspect public Kubb metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/inspect-kubb.py
