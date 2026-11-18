@@ -44,14 +44,16 @@ const KEY = "myvideo-multi-sources-v1";
 export function isExcludedHubSource(source: Pick<HubSource, "id" | "homepage">): boolean {
   // A site enters the active catalog only after search + in-app playback
   // + offline download have been verified. Keep old saved sites hidden.
-  return source.id !== "nnyy";
+  return source.id !== "nnyy" && source.id !== "kubb";
 }
 
 const defaultSites: HubSource[] = videoSourceCandidates.map((s) => ({
   id: s.id,
   name: s.name,
   homepage: s.homepage,
-  searchTemplate: "https://nnyy.in/so?q={query}",
+  searchTemplate: s.id === "kubb"
+    ? "https://api.kubb.tv/api/List/GetTitleGetData?SearchCriteria={query}"
+    : "https://nnyy.in/so?q={query}",
   enabled: true,
   configured: true,
 }));
@@ -204,6 +206,9 @@ export async function searchPublicSite(source: HubSource, query: string): Promis
   discovered: boolean;
 }> {
   if (isExcludedHubSource(source)) throw new Error("该网站尚未通过完整功能验收，已从聚合搜索排除");
+  if (source.id === "kubb") {
+    return { items: await searchKubb(keywordNormalized(query)), template: source.searchTemplate, discovered: false };
+  }
   let resolved = source;
   let discovered = false;
   if (!source.configured) {
@@ -485,4 +490,118 @@ export async function fetchNnyyEpisode(episodeUrl: string): Promise<HubMedia[]> 
     } catch { /* ignore unusable playback records */ }
   }
   return result;
+}
+
+
+/** Kubb TV public, anonymous GET endpoints (https://api.kubb.tv).
+ * The adapter uses only content explicitly returned for public viewing, not
+ * account tokens, restricted VIP streams or encryption workarounds.
+ */
+function keywordNormalized(query: string): string {
+  return query.trim().slice(0, 100);
+}
+type KubbRecord = Record<string, unknown>;
+function kubbObject(value: unknown): KubbRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as KubbRecord : null;
+}
+function kubbText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+function kubbMediaKey(url: string): string {
+  const target = new URL(url);
+  if (target.protocol !== "https:" || target.hostname !== "m.kubb.tv") {
+    throw new Error("无效的 Kubb 播放地址");
+  }
+  const mediaKey = /^\/play\/([A-Za-z0-9_-]{6,50})\/?$/.exec(target.pathname)?.[1];
+  if (!mediaKey) throw new Error("Kubb 播放地址缺少作品标识");
+  return mediaKey;
+}
+async function kubbGet(endpoint: "GetTitleGetData" | "VideoDetails" | "getPlayData", params: Record<string,string>): Promise<KubbRecord> {
+  const path = endpoint === "GetTitleGetData" ? "/api/List/GetTitleGetData"
+    : "/api/Video/" + endpoint;
+  const target = new URL("https://api.kubb.tv" + path);
+  for (const [name,value] of Object.entries(params)) target.searchParams.set(name,value);
+  const json: unknown = await invoke("hub_fetch_public_json", { url: target.href });
+  const payload = kubbObject(json);
+  if (!payload || payload.ret !== 200) throw new Error("Kubb 公开接口未返回成功结果");
+  return kubbObject(payload.data) || {};
+}
+function kubbEpisodes(items: unknown): KubbRecord[] {
+  if (!Array.isArray(items)) return [];
+  return items.map(kubbObject).filter((item): item is KubbRecord => item !== null);
+}
+export async function searchKubb(query: string): Promise<HubResult[]> {
+  const search = keywordNormalized(query);
+  if (!search) return [];
+  const data = await kubbGet("GetTitleGetData", { SearchCriteria: search });
+  const out: HubResult[] = [];
+  const known = new Set<string>();
+  for (const item of kubbEpisodes(data.list)) {
+    const nested = kubbEpisodes(item.episodes);
+    const mediaKey = kubbText(item.mediaKey) || nested.map((e) => kubbText(e.mediaKey)).find(Boolean) || "";
+    const title = kubbText(item.title);
+    if (!/^[A-Za-z0-9_-]{6,50}$/.test(mediaKey) || !title || known.has(mediaKey)) continue;
+    const url = "https://m.kubb.tv/play/" + mediaKey;
+    known.add(mediaKey);
+    const poster = kubbText(item.coverImgUrl);
+    out.push({ id: "kubb|" + mediaKey, sourceId: "kubb", sourceName: "Kubb TV 酷播",
+      title, url, ...(poster.startsWith("https://") ? { poster } : {}) });
+    if (out.length >= 60) break;
+  }
+  return out;
+}
+function playableKubbLink(value: unknown): HubMedia | null {
+  const item = kubbObject(value);
+  if (!item || item.isVip !== false || item.isLimit === true) return null;
+  const raw = kubbText(item.mediaUrl);
+  let target: URL;
+  try { target = new URL(raw); } catch { return null; }
+  if (target.protocol !== "https:") return null;
+  const type = /\.m3u8(?:[?#]|$)/i.test(target.href) ? "hls"
+    : /\.mp4(?:[?#]|$)/i.test(target.href) ? "mp4"
+    : /\.webm(?:[?#]|$)/i.test(target.href) ? "webm" : null;
+  return type ? { url: target.href, type } : null;
+}
+export async function fetchKubbDetail(url: string): Promise<{ title: string; episodes: HubEpisode[] }> {
+  const mediaKey = kubbMediaKey(url);
+  const [details, tracks] = await Promise.all([
+    kubbGet("VideoDetails", { mediaKey }),
+    kubbGet("getPlayData", { mediaKey }),
+  ]);
+  const detail = kubbObject(details.detailInfo);
+  const title = kubbText(detail?.title) || "Kubb 视频";
+  const episodes: HubEpisode[] = [];
+  const seen = new Set<string>();
+  for (const item of kubbEpisodes(tracks.list)) {
+    const link = playableKubbLink(item);
+    const episodeKey = kubbText(item.episodeKey);
+    if (!link || !/^[A-Za-z0-9_-]{6,50}$/.test(episodeKey) || seen.has(episodeKey)) continue;
+    const variantKey = kubbText(item.mediaKey) || mediaKey;
+    if (!/^[A-Za-z0-9_-]{6,50}$/.test(variantKey)) continue;
+    const label = kubbText(item.episodeTitle) || kubbText(item.title) ||
+      kubbText(item.resolutionDes) || "免费线路";
+    episodes.push({
+      title: label,
+      url: "https://m.kubb.tv/play/" + variantKey + "?id=" + encodeURIComponent(episodeKey),
+    });
+    seen.add(episodeKey);
+    if (episodes.length >= 180) break;
+  }
+  return { title, episodes };
+}
+export async function fetchKubbEpisode(episodeUrl: string): Promise<HubMedia[]> {
+  const mediaKey = kubbMediaKey(episodeUrl);
+  const episodeKey = new URL(episodeUrl).searchParams.get("id") || "";
+  if (!/^[A-Za-z0-9_-]{6,50}$/.test(episodeKey)) {
+    throw new Error("Kubb 选集缺少有效 episodeKey");
+  }
+  const data = await kubbGet("getPlayData", { mediaKey });
+  for (const item of kubbEpisodes(data.list)) {
+    if (kubbText(item.episodeKey) !== episodeKey) continue;
+    const link = playableKubbLink(item);
+    if (!link) throw new Error("这条线路需要 VIP 权限或未提供公开播放地址");
+    return [link];
+  }
+  throw new Error("Kubb 公开接口中没有找到对应选集");
 }
