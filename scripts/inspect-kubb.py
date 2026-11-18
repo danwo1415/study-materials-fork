@@ -167,3 +167,40 @@ for endpoint, params in [
         except json.JSONDecodeError: result={"content_sample":raw[:130]}
         print("KUBB_REAL_API",endpoint,"status",resp.status,"type",typ,"shape",repr(result)[:3500],flush=True)
     except Exception as e: print("KUBB_REAL_API_ERROR",endpoint,type(e).__name__,str(e)[:160],flush=True)
+
+# Examine public media URL types without fetching copyrighted video content.
+for endpoint in ("/api/Video/VideoChooseGather", "/api/Video/getPlayData"):
+    url="https://api.kubb.tv"+endpoint+"?mediaKey=qVyzCcnhWtG"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url,headers={**HEADERS,"Accept":"application/json"}),timeout=12) as response:
+            payload=json.loads(response.read(50000))
+        items=payload.get("data",{}).get("list",[])
+        out=[]
+        for item in items[:6]:
+            link=item.get("mediaUrl","")
+            parsed=urlparse(link) if isinstance(link,str) else None
+            out.append({"episodeTitle":str(item.get("episodeTitle",""))[:80],
+                "isVip":item.get("isVip"),"isLimit":item.get("isLimit"),
+                "episodeKey":item.get("episodeKey"),
+                "mediaUrl_nonempty":bool(link),"media_scheme":parsed.scheme if parsed else None,
+                "media_host":parsed.hostname if parsed else None,
+                "media_path_suffix":parsed.path[-45:] if parsed else None,
+                "videoType":item.get("videoType"),"resolution":item.get("resolution"),
+                "mediaId":item.get("mediaId")})
+        print("KUBB_PLAYLIST_META",endpoint,json.dumps(out,ensure_ascii=False),flush=True)
+    except Exception as e:print("KUBB_PLAYLIST_ERROR",endpoint,type(e).__name__,str(e)[:100],flush=True)
+
+# Search endpoint controls: Kubb returns a JSON list; check public GET parameter names.
+for params in [
+    {"keyWord":"公民义警","page":1}, {"keyword":"公民义警","page":1},
+    {"keyWord":"公民义警","pageIndex":1}, {"title":"公民义警","page":1},
+    {"search":"公民义警","page":1}, {"name":"公民义警","page":1}
+]:
+    url="https://api.kubb.tv/api/List/GetTitleGetData?"+urlencode(params)
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url,headers={**HEADERS,"Accept":"application/json"}),timeout=11) as response:
+            obj=json.loads(response.read(25000))
+        data=obj.get("data",{})
+        list_=data.get("list",[]) if isinstance(data,dict) else []
+        print("KUBB_SEARCH_PARAM",json.dumps(params,ensure_ascii=False),"ret",obj.get("ret"),"n",len(list_),"first_shape",repr(summarize_response(list_[0]))[:1100] if list_ else None,flush=True)
+    except Exception as e: print("KUBB_SEARCH_PARAM_ERROR",str(e)[:130],flush=True)
