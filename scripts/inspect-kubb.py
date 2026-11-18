@@ -290,3 +290,31 @@ try:
                 print("INUYASHA_API_ERROR",endpoint,type(e).__name__,str(e)[:120],flush=True)
 except Exception as e:
     print("INUYASHA_DIAG_ERROR",type(e).__name__,str(e)[:140],flush=True)
+
+
+# Confirm that selecting an episode returns ITS media, not the last-played one.
+print("==== INUYASHA EPISODE PLAY SELECTION",flush=True)
+for params in [
+    {"mediaKey":"06TnrIsiRP7","episodeKey":"cFfQkN3Hfr8"},
+    {"mediaKey":"06TnrIsiRP7","id":"cFfQkN3Hfr8"},
+    {"mediaKey":"06TnrIsiRP7","episodeId":"122647"},
+    {"episodeKey":"cFfQkN3Hfr8"},
+    {"mediaKey":"06TnrIsiRP7","episodeKey":"aWGeGOGluBD"},
+]:
+    try:
+        data=api_data("/api/Video/getPlayData",params)
+        first=data.get("list",[None])[0]
+        print("INUYASHA_PLAY_PARAM",json.dumps({"params":params,"count":len(data.get("list",[])),
+            "returnedKey":safe_str(first.get("episodeKey")) if first else "",
+            "returnedTitle":safe_str(first.get("episodeTitle")) if first else "",
+            "hasUrl":bool(first.get("mediaUrl")) if first else False},ensure_ascii=False),flush=True)
+    except Exception as e: print("INUYASHA_PLAY_PARAM_ERROR",type(e).__name__,str(e)[:120],flush=True)
+
+# Full published browser bundle call site surrounding the public getPlayData method.
+try:
+    with urllib.request.urlopen(urllib.request.Request("https://m.kubb.tv/script/app.1791277306588.js",headers=HEADERS),timeout=12) as resp:
+        bundle=resp.read(1500000).decode("utf-8","replace")
+    for term in ['"/api/Video/getPlayData"', '"/api/Video/VideoChooseGather"']:
+        for match in list(re.finditer(re.escape(term),bundle))[:3]:
+            print("INUYASHA_JS_CALL",repr(bundle[max(0,match.start()-700):match.end()+500]),flush=True)
+except Exception as e:print("INUYASHA_JS_ERROR",type(e).__name__,str(e)[:120],flush=True)
