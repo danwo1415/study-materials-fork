@@ -131,3 +131,19 @@ for endpoint,params in [
             kind=resp.headers.get("Content-Type")
         print("KUBB_GET_API",endpoint,"status",resp.status,"type",kind,"data",repr(summarize_response(json.loads(raw)))[:2500],flush=True)
     except Exception as e: print("KUBB_GET_ERROR",endpoint,type(e).__name__,str(e)[:150],flush=True)
+
+# Inspect host selection and GET search argument names without guessing a protected endpoint.
+for filename, terms in [
+  ("app.1791277306588.js", ["var C=s.a.create", "function v(t){", "function b(t){", "https://api.", "m10.", "function y(t)", "ppt.{Host}"]),
+  ("chunk-cc6e1d50.1791277306588.js", ["/api/Home/GetKeyWord","/api/List/GetTitleGetData","keyWord", "keyWord:", "page:", "searchList", "getSearchData"])
+]:
+  try:
+    with urllib.request.urlopen(urllib.request.Request("https://m.kubb.tv/script/"+filename,headers=HEADERS),timeout=14) as response:
+      content=response.read(800000).decode("utf-8","replace")
+    print("==== ROUTER SEARCH",filename,flush=True)
+    for term in terms:
+      matches=list(re.finditer(re.escape(term),content))
+      print("ROUTE_TERM",term,"occurrences",len(matches),flush=True)
+      for match in matches[:3]:
+        print("ROUTE_CTX",repr(content[max(0,match.start()-1600):min(len(content),match.end()+550)]),flush=True)
+  except Exception as e:print("ROUTE_ERROR",str(e)[:120],flush=True)
