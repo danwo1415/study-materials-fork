@@ -248,6 +248,78 @@ export async function searchPublicSite(source: HubSource, query: string): Promis
   };
 }
 
+
+/** MyVideo category browsing uses public Nnyy listings, not hardcoded titles. */
+export const NNY_CATEGORIES = [
+  { id: "dongman", label: "动漫" },
+  { id: "dianying", label: "电影" },
+  { id: "dianshiju", label: "电视剧" },
+  { id: "zongyi", label: "综艺" },
+] as const;
+export type NnyCategory = typeof NNY_CATEGORIES[number]["id"];
+export type NnySort = "latest" | "popular";
+export type NnyGenre = { label: string; url: string };
+export type NnyCatalog = { results: HubResult[]; genres: NnyGenre[] };
+
+export function parseNnyCatalog(html: string, pageUrl: string, category: NnyCategory): NnyCatalog {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("script,style,noscript").forEach((x) => x.remove());
+  const titles: HubResult[] = [];
+  const visited = new Set<string>();
+  const route = new RegExp("^/" + category + "/[0-9]+\\.html$","i");
+  for (const a of doc.querySelectorAll("a[href]")) {
+    const href = absoluteUrl(pageUrl, a.getAttribute("href") || "");
+    if (!href) continue;
+    const u = new URL(href);
+    if (u.hostname !== "nnyy.in" || !route.test(u.pathname) || visited.has(u.pathname)) continue;
+    // The card image/heading may be in a sibling link; prefer the heading when present.
+    const card = a.closest("li,.item,.video,.module-item,.movie,.vod-item,.list-item") || a;
+    const heading = card.querySelector("h2,h3,h4,.title,.name");
+    const title = (heading?.textContent || a.getAttribute("title") || a.querySelector("img")?.getAttribute("alt") ||
+      a.textContent || "").trim().replace(/\s+/g, " ").slice(0, 125);
+    if (title.length < 2 || TITLE_SKIP.test(title)) continue;
+    const poster = normalizePoster(a, pageUrl);
+    titles.push({ id: "nnyy|" + u.origin + u.pathname, sourceId: "nnyy",
+      sourceName: "努努影院", title, url: u.origin + u.pathname,
+      ...(poster ? { poster } : {}) });
+    visited.add(u.pathname);
+    if (titles.length >= 48) break;
+  }
+  const genres: NnyGenre[] = [{ label: "全部", url: "https://nnyy.in/" + category + "/" }];
+  const seen = new Set(["全部"]);
+  for (const a of doc.querySelectorAll("a[href]")) {
+    const href = absoluteUrl(pageUrl, a.getAttribute("href") || "");
+    if (!href) continue;
+    const u = new URL(href);
+    if (u.hostname !== "nnyy.in" || u.pathname !== "/" + category + "/" ||
+        !u.searchParams.has("genre")) continue;
+    const label = (a.textContent || "").trim().replace(/\s+/g, "");
+    if (!label || label.length > 12 || seen.has(label)) continue;
+    genres.push({ label, url: u.origin + u.pathname + "?genre=" +
+      encodeURIComponent(u.searchParams.get("genre") || "") });
+    seen.add(label);
+    if (genres.length >= 24) break;
+  }
+  return { results: titles, genres };
+}
+
+export async function fetchNnyCatalog(
+  category: NnyCategory, sort: NnySort, genre?: string,
+): Promise<NnyCatalog> {
+  if (!NNY_CATEGORIES.some((entry) => entry.id === category)) throw new Error("无效分类");
+  const url = new URL("https://nnyy.in/" + category + "/");
+  if (genre) {
+    const g = new URL(genre);
+    if (g.protocol !== "https:" || g.hostname !== "nnyy.in" ||
+        g.pathname !== url.pathname || !g.searchParams.has("genre")) {
+      throw new Error("无效类别过滤地址");
+    }
+    url.searchParams.set("genre", g.searchParams.get("genre") || "");
+  }
+  if (sort === "popular") url.searchParams.set("ob", "click");
+  return parseNnyCatalog(await fetchHubHtml(url.href), url.href, category);
+}
+
 export function findDirectMedia(html: string, pageUrl: string): HubMedia[] {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const urls = new Set<string>();
