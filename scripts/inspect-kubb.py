@@ -383,3 +383,65 @@ try:
    print("IKANBOT_HTML_CONTEXT",term,repr(snippet[:850]),flush=True)
 except Exception as e:
  print("IKANBOT_CONTRACT_ERROR",type(e).__name__,str(e)[:150],flush=True)
+
+
+# Direct verification of the public Ikanbot playback manifest API, without tokens or media bytes.
+print("==== IKANBOT DIRECT PUBLIC ENDPOINT CHECK", flush=True)
+try:
+  target="https://www1.ikanbot.com/play/442095"
+  with urllib.request.urlopen(urllib.request.Request(target,headers=HEADERS),timeout=15) as resp:
+    text=resp.read(130000).decode("utf-8","replace")
+  for needle in ["loadVideoId","mtype","v_tks","lineContent","video_title","get_tks","/search","searchForm"]:
+    hit=list(re.finditer(re.escape(needle),text,re.I))
+    contexts=[]
+    for m in hit[:2]:
+      view=text[max(0,m.start()-120):m.end()+170]
+      # Avoid printing page tokens or signed remote URLs.
+      view=re.sub(r'https?://[^\s"\'<>]+',"[REMOTE_URL]",view)
+      view=re.sub(r'(v_tks\s*=\s*)[^;]+',r'\1[REDACTED]',view)
+      if needle == "get_tks": view="[JS TOKEN FUNCTION PRESENT]"
+      contexts.append(view[:340])
+    print("IKANBOT_PARAMS",json.dumps({"term":needle,"matches":len(hit),"contexts":contexts},ensure_ascii=False),flush=True)
+  inspect=Inspect();inspect.feed(text)
+  print("IKANBOT_FORMS",json.dumps(inspect.forms[:12],ensure_ascii=False),flush=True)
+except Exception as e:
+  print("IKANBOT_PAGE_PARAMS_ERROR",type(e).__name__,str(e)[:160],flush=True)
+
+for mtype in ["1","0","2"]:
+  params={"videoId":"442095","mtype":mtype,"token":""}
+  api_url="https://www1.ikanbot.com/api/getResN?"+urlencode(params)
+  try:
+    request=urllib.request.Request(api_url,headers={**HEADERS,"Accept":"application/json","Referer":"https://www1.ikanbot.com/play/442095"})
+    with urllib.request.urlopen(request,timeout=15) as response:
+      raw=response.read(500000).decode("utf-8","replace")
+      status=response.status
+      content_type=response.headers.get("Content-Type","")
+    try:
+      data=json.loads(raw)
+      items=(data.get("data") or {}).get("list") if isinstance(data,dict) else None
+      groups=items if isinstance(items,list) else []
+      output={"http_status":status,"mtype":mtype,"content_type":content_type,
+        "state":data.get("state"),"top_keys":list(data.keys())[:16],
+        "data_keys":list(data.get("data",{}).keys())[:16] if isinstance(data.get("data"),dict) else [],
+        "groups_count":len(groups),"group_types":[type(x).__name__ for x in groups[:3]],
+        "group_keys":[list(x.keys())[:12] for x in groups[:3] if isinstance(x,dict)]}
+      print("IKANBOT_GETRES",json.dumps(output,ensure_ascii=False),flush=True)
+      # Summarize episode and stream shape, but never expose URLs.
+      for g in groups[:2]:
+        if not isinstance(g,dict):continue
+        summaries={}
+        for k,v in g.items():
+          if isinstance(v,list):
+            summaries[k]={"type":"list","length":len(v),"first_type":type(v[0]).__name__ if v else ""}
+          elif isinstance(v,str):
+            summaries[k]={"type":"str","length":len(v),"m3u8_count":v.lower().count(".m3u8"),
+               "separator_count":v.count("#")}
+          elif isinstance(v,(dict,int,float,bool)):
+            summaries[k]={"type":type(v).__name__}
+        print("IKANBOT_GROUP",json.dumps(summaries,ensure_ascii=False),flush=True)
+    except json.JSONDecodeError:
+      print("IKANBOT_GETRES_NOT_JSON",json.dumps({"status":status,"mtype":mtype,"type":content_type,"len":len(raw),"looks_html":"<html" in raw.lower()},ensure_ascii=False),flush=True)
+  except urllib.error.HTTPError as e:
+    print("IKANBOT_GETRES_HTTP_ERROR",json.dumps({"mtype":mtype,"status":e.code},ensure_ascii=False),flush=True)
+  except Exception as e:
+    print("IKANBOT_GETRES_ERROR",json.dumps({"mtype":mtype,"error":type(e).__name__,"desc":str(e)[:100]},ensure_ascii=False),flush=True)
