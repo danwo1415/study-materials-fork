@@ -224,7 +224,6 @@ fn loaded_record(root: &Path, id: &str, key: &str, kind: &str, url: &str, title:
         if record.key != key || record.kind != kind {
             return Err("续传标识碰撞或文件类型变化；请先移除旧任务".into());
         }
-        record.source_url = url.to_string();
         record.title = title.trim().chars().take(120).collect();
         Ok(record)
     } else {
@@ -329,6 +328,12 @@ fn playlist_fingerprint(snapshot: &HlsSnapshot) -> String {
                 h ^= u64::from(*b);
                 h = h.wrapping_mul(0x100000001b3);
             }
+        }
+    }
+    for row in snapshot.playlist.lines().filter(|line| line.starts_with("#EXTINF:")) {
+        for b in row.as_bytes().iter().chain([b'\n'].iter()) {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x100000001b3);
         }
     }
     format!("{h:016x}-{}",snapshot.segments.len())
