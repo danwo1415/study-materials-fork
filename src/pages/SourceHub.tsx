@@ -14,7 +14,7 @@ type SourceStatus = { state: "searching" | "ok" | "empty" | "error"; detail?: st
 
 type AdSpan = { start: number; end: number };
 const AD_SECONDS = 6;
-const AD_STORAGE_PREFIX = "hghub-ad-skips-v1:";
+const AD_STORAGE_PREFIX = "myvideo-ad-skips-v1:";
 
 function readAdSkips(key: string): AdSpan[] {
   try {
