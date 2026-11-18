@@ -73,3 +73,23 @@ for source in SITES:
                         print("public_script_error",type(e).__name__,str(e)[:100])
     except Exception as e:
         print("site_error",json.dumps({"type":type(e).__name__,"message":str(e)[:150]},ensure_ascii=False))
+
+# Targeted adapter investigation using only the public JavaScript bundles.
+try:
+    base = "https://m.kubb.tv/script/"
+    for filename in ["app.1791277306588.js", "chunk-ce7e84a0.1791277306588.js"]:
+        print("==== KUBB ADAPTER BUNDLE", filename, flush=True)
+        with urllib.request.urlopen(urllib.request.Request(base+filename, headers=HEADERS), timeout=18) as resp:
+            data = resp.read(1500000).decode("utf-8","replace")
+        for term in ["function v(", "function b(", "function v(t)", "function b(t)", "function o(t)", "url:\"/api/Video/VideoDetails\"", "url:\"/api/Video/getPlayData\"", "url:\"/api/video/GetPlayAddress\"", "mediaKey", "videoKey", "GetSearch", "SearchVideo", "/api/Search/", "/api/search/", "search?"]:
+            indexes = [m.start() for m in re.finditer(re.escape(term),data,re.I)]
+            print("BUNDLE_TERM",term,"count",len(indexes))
+            for i in indexes[:4]:
+                print("BUNDLE_CONTEXT",repr(data[max(0,i-220):min(len(data),i+460)]))
+        paths = list(dict.fromkeys(re.findall(r'url:"(/api/[^"]{2,100})"',data,re.I)))
+        print("BUNDLE_API_PATHS",json.dumps([x for x in paths if any(t in x.lower() for t in ("search","play","video","list","home"))][:70],ensure_ascii=False))
+        if filename.startswith("app."):
+            for match in list(re.finditer(r'path:"/search[^"]*"',data,re.I))[:3]:
+                print("SEARCH_ROUTE_CONTEXT",repr(data[max(0,match.start()-280):match.end()+320]))
+except Exception as e:
+    print("ADAPTER_BUNDLE_ERROR",type(e).__name__,str(e)[:200])
