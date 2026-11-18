@@ -33,7 +33,7 @@ export type HubDownload = {
   contentType: string;
 };
 
-const KEY = "hghub-multi-sources-v2";
+const KEY = "myvideo-multi-sources-v1";
 
 /**
  * Sites that do not satisfy the required trio (search + in-app playback +
