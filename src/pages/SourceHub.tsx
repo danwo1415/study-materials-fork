@@ -41,6 +41,8 @@ function EmbeddedVideo({ media, adMarkerKey }: {
   adMarkerKey?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [playbackStatus, setPlaybackStatus] = useState("");
+  const [playbackError, setPlaybackError] = useState("");
   const [adSpans, setAdSpans] = useState<AdSpan[]>(() => adMarkerKey ? readAdSkips(adMarkerKey) : []);
   const [adNotice, setAdNotice] = useState("");
   const spansRef = useRef(adSpans);
@@ -70,6 +72,14 @@ function EmbeddedVideo({ media, adMarkerKey }: {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || media.type === "embed") return;
+    setPlaybackStatus("正在读取视频…");
+    setPlaybackError("");
+    const onPlaying = () => { setPlaybackStatus(""); setPlaybackError(""); };
+    const onWaiting = () => setPlaybackStatus("视频正在缓冲…");
+    const onVideoError = () => setPlaybackError("播放器错误：" + (video.error?.message || "视频格式不受支持"));
+    video.addEventListener("playing", onPlaying);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("error", onVideoError);
     const skipMarkedAd = () => {
       const time = video.currentTime;
       const matched = spansRef.current.find((span) => time >= span.start && time < span.end);
@@ -84,6 +94,18 @@ function EmbeddedVideo({ media, adMarkerKey }: {
     let hls: Hls | undefined;
     if ((media.type === "hls" || media.type === "offline-hls") && Hls.isSupported()) {
       hls = new Hls({ enableWorker: false });
+      hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+        setPlaybackStatus("已读取播放列表，正在加载视频分片…（" + data.levels.length + " 个清晰度）");
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        const details = String(data.details || "unknown");
+        const status = data.response?.code ? " HTTP " + data.response.code : "";
+        if (data.fatal) {
+          setPlaybackError("HLS 播放失败：" + details + status + "。可尝试切换线路。");
+        } else if (/fragLoad|keyLoad|levelLoad|manifestLoad/i.test(details)) {
+          setPlaybackStatus("视频加载异常：" + details + status);
+        }
+      });
       hls.loadSource(media.type === "offline-hls" ? media.url : LOCAL + "/hls?u=" + encodeURIComponent(media.url));
       hls.attachMedia(video);
     } else if (media.type === "hls" || media.type === "offline-hls") {
@@ -94,6 +116,9 @@ function EmbeddedVideo({ media, adMarkerKey }: {
       video.src = LOCAL + "/seg?u=" + encodeURIComponent(media.url);
     }
     return () => {
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("error", onVideoError);
       video.removeEventListener("timeupdate", skipMarkedAd);
       hls?.destroy();
       video.removeAttribute("src");
@@ -111,6 +136,8 @@ function EmbeddedVideo({ media, adMarkerKey }: {
   return <div className="space-y-2">
     <video ref={videoRef} controls playsInline preload="metadata"
       className="w-full max-h-[270px] bg-black rounded-(--r-md)" />
+    {playbackError && <div role="alert" className="text-[12px] rounded-(--r-sm) p-2 bg-s3 text-on">{playbackError}</div>}
+    {!playbackError && playbackStatus && <div role="status" className="text-[11px] text-mut">{playbackStatus}</div>}
     {adMarkerKey && <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={markAd}
