@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 // Standalone playback origin; there is no Huangguo API import in MyVideo.
 const LOCAL = /Android|Windows/i.test(navigator.userAgent) ? "http://hg.localhost" : "hg://localhost";
@@ -520,6 +521,12 @@ export default function SourceHub() {
         {detailLoading ? <div className="text-[13px] rounded-(--r-sm) bg-s3 p-3" role="status">正在获取剧集及播放线路，请查看网络连接…</div> : media.length ? media.map((m, i) =>
           <div key={m.url} className="space-y-2 border-t border-white/10 pt-2">
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
+            {selected.sourceId === "ikanbot" && m.type === "hls" && <button type="button" className={btn}
+              onClick={() => { void invoke("plugin:nativevideo|play", {
+                url: m.url, title: selected.title + (activeEpisode ? " · " + activeEpisode.title : "")
+              }).catch((error: unknown) => setMessage("Android 原生播放器打开失败：" + String(error))); }}>
+              使用 Android 原生播放器播放（Media3）
+            </button>}
             <EmbeddedVideo key={m.url + "|" + (activeEpisode?.url || "")} media={m}
               adMarkerKey={selected.sourceId === "nnyy" ? "nnyy|" + (activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title) : undefined} />
             {selected.sourceId !== "ikanbot" && (m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
