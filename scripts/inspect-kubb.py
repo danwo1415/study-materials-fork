@@ -589,3 +589,83 @@ try:
    "drm_directive":b"#EXT-X-KEY:" in body,
    "seg_count_in_sample":sum(1 for line in body.splitlines() if line.strip() and not line.startswith(b"#"))},ensure_ascii=False),flush=True)
 except Exception as e:print("IKANBOT_MANIFEST_RESULT_ERROR",type(e).__name__,str(e)[:155],flush=True)
+
+
+# Diagnose playtest screenshot cases: film without lines and anime loading at 0:00.
+# Only inspect public manifest metadata; no audiovisual segments are downloaded.
+print("==== PLAYTEST CASE DIAGNOSTICS",flush=True)
+from html import unescape as unesc
+from urllib.parse import quote
+def ikan_catalog_probe(page):
+  try:
+    with urllib.request.urlopen(urllib.request.Request(page,headers=HEADERS),timeout=12) as r:
+      html=r.read(200000).decode("utf-8","replace")
+    inputs={}
+    for m in re.finditer(r'<input\b[^>]*>',html,re.I):
+      attrs=dict(re.findall(r'([\w-]+)\s*=\s*["\x27]([^"\x27]*)["\x27]',m.group()))
+      if attrs.get("id") in ("current_id","e_token","mtype"):inputs[attrs["id"]]=attrs.get("value","")
+    if not all(inputs.values()):
+      print("PLAYTEST_NO_INPUTS",{"path":urlparse(page).path,"found":list(inputs)},flush=True);return
+    e=inputs["e_token"];pieces=[]
+    for d in inputs["current_id"][-4:]:
+      n=int(d)%3+1;pieces.append(e[n:n+8]);e=e[n+8:]
+    api="https://www1.ikanbot.com/api/getResN?"+urlencode({"videoId":inputs["current_id"],"mtype":inputs["mtype"],"token":"".join(pieces)})
+    with urllib.request.urlopen(urllib.request.Request(api,headers={**HEADERS,"Referer":page}),timeout=12) as r:
+      obj=json.load(r)
+    groups=(obj.get("data") or {}).get("list",[])
+    print("PLAYTEST_CATALOG",json.dumps({"path":urlparse(page).path,"state":obj.get("state"),"type":inputs["mtype"],"groups":len(groups)},ensure_ascii=False),flush=True)
+    for group in groups[:3]:
+      raw=group.get("resData","")
+      try:
+        tracks=json.loads(raw)
+      except Exception as ex:
+        print("PLAYTEST_LINE_JSON_ERROR",str(ex)[:80],"size",len(raw),flush=True);continue
+      print("PLAYTEST_LINE_SHAPE",json.dumps({"container":type(tracks).__name__,
+        "count":len(tracks) if isinstance(tracks,list) else len(tracks.keys()) if isinstance(tracks,dict) else 0,
+        "sample": [{"flag":x.get("flag"),"urlLen":len(x.get("url","")),"prefix":x.get("url","")[:18]} for x in tracks[:2]] if isinstance(tracks,list) else list(tracks.keys())[:9]},ensure_ascii=False),flush=True)
+      if not isinstance(tracks,list):continue
+      for track in tracks[:1]:
+        text=track.get("url","")
+        labels=[]
+        for item in text.split("#")[:3]:
+          part=item.split("$",1)
+          if len(part)==2:labels.append({"label":part[0][:45],
+            "path_suffix":urlparse(part[1]).path[-12:],
+            "https":urlparse(part[1]).scheme=="https",
+            "has_query":bool(urlparse(part[1]).query)})
+        print("PLAYTEST_ITEM_SHAPE",json.dumps(labels,ensure_ascii=False),flush=True)
+        parts=[x.split("$",1) for x in text.split("#") if "$" in x]
+        for number in [0,13]:
+          if len(parts)<=number:continue
+          uri=parts[number][1]
+          if not uri.startswith("https://"):continue
+          try:
+            with urllib.request.urlopen(urllib.request.Request(uri,headers={"User-Agent":HEADERS["User-Agent"]}),timeout=12) as response:
+              manifest=response.read(100000).decode("utf-8","replace")
+            keys=[x for x in manifest.splitlines() if x.startswith("#EXT-X-KEY:")]
+            seg=next((x.strip() for x in manifest.splitlines() if x.strip() and not x.startswith("#")),None)
+            key_uri=re.search(r'URI="([^"]+)"',keys[0]).group(1) if keys and re.search(r'URI="([^"]+)"',keys[0]) else None
+            print("PLAYTEST_HLS",json.dumps({"episode":number+1,"valid":manifest.startswith("#EXTM3U"),"key_method":re.search("METHOD=([^,]+)",keys[0]).group(1) if keys else None,
+              "key_scheme":urlparse(urljoin(uri,key_uri)).scheme if key_uri else None,
+              "segment_scheme":urlparse(urljoin(uri,seg)).scheme if seg else None,
+              "key_host_same":urlparse(urljoin(uri,key_uri)).hostname==urlparse(uri).hostname if key_uri else None,
+              "segment_host_same":urlparse(urljoin(uri,seg)).hostname==urlparse(uri).hostname if seg else None,
+              "playlist_host":urlparse(uri).hostname,
+              "segments":len([x for x in manifest.splitlines() if x.strip() and not x.startswith("#")])},ensure_ascii=False),flush=True)
+          except Exception as e:
+            print("PLAYTEST_HLS_ERROR",number+1,type(e).__name__,str(e)[:120],flush=True)
+      break
+  except Exception as e:
+    print("PLAYTEST_CATALOG_ERROR",urlparse(page).path,type(e).__name__,str(e)[:120],flush=True)
+
+try:
+  with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/search?q="+quote("犬夜叉：镜中的梦幻城"),headers=HEADERS),timeout=12) as r:
+    search_html=r.read(200000).decode("utf-8","replace")
+  p=Inspect();p.feed(search_html)
+  links=[(urljoin("https://www1.ikanbot.com",href),label) for href,label in p.links if "/play/" in href]
+  print("PLAYTEST_MOVIE_SEARCH",json.dumps([{"path":urlparse(u).path,"title":title[:65]} for u,title in links[:20]],ensure_ascii=False),flush=True)
+  # Find movie by title in collected anchors
+  movie=next((u for u,t in links if "镜中的梦幻城" in t),None)
+  if movie: ikan_catalog_probe(movie)
+except Exception as e:print("PLAYTEST_SEARCH_ERROR",type(e).__name__,str(e)[:100],flush=True)
+ikan_catalog_probe("https://www1.ikanbot.com/play/442095")
