@@ -494,6 +494,9 @@ export default function SourceHub() {
           <div className="text-[12px] font-semibold">爱看机器人 · 原生播放测试</div>
           <div className="text-[11px] text-mut">读取该网站公开网页的播放线路，使用 MyVideo 原生 HLS 播放器。此来源暂不支持下载；如线路失效可切换线路重新播放。</div>
         </div>}
+        {selected.sourceId === "ikanbot" && !detailLoading && ikanbotLines.length === 0 && <div role="status" className="text-[12px] bg-s3 rounded-(--r-sm) p-3">
+          {message || "该作品当前没有公开的 HLS 播放线路，无法在 MyVideo 内原生播放。"}
+        </div>}
         {selected.sourceId === "ikanbot" && ikanbotLines.length > 0 && <div className="space-y-2">
           <div className="text-[12px] font-semibold">播放线路（{ikanbotLines.length}）</div>
           <div className="flex gap-2 overflow-x-auto pb-2">{ikanbotLines.map((line, index) =>
@@ -522,7 +525,9 @@ export default function SourceHub() {
             {selected.sourceId !== "ikanbot" && (m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
               onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频（支持续传）"}</button>}
             {selected.sourceId !== "ikanbot" && m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
-          </div>) : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
+          </div>) : selected.sourceId === "ikanbot" && ikanbotLines.length === 0
+          ? <div className="text-[11px] text-mut">爱看机器人未返回该作品的公开播放线路；可尝试搜索其他版本。</div>
+          : <div className="text-[11px] text-mut">未识别到公开的直接视频文件；该站可能使用脚本播放器、登录或受保护的视频接口。</div>}
 
       </div>}
       {!selected && !searching && !results.length && query.trim() && Object.keys(statuses).length > 0 &&
