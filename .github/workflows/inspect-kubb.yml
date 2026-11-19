@@ -1,7 +1,7 @@
-name: Inspect Kubb public site
+name: Inspect MyVideo Playtest public streams
 on:
   push:
-    branches: [myvideo]
+    branches: [myvideo-ikanbot-playtest]
     paths:
       - "scripts/inspect-kubb.py"
       - ".github/workflows/inspect-kubb.yml"
@@ -10,7 +10,7 @@ permissions:
   contents: read
 jobs:
   inspect:
-    name: Inspect public Kubb metadata
+    name: Probe public Ikanbot playback
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
