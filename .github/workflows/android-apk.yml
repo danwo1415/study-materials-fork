@@ -11,6 +11,7 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
       - "scripts/check-myvideo-isolation.mjs"
+      - "scripts/inspect-kubb.py"
 
 permissions:
   contents: read
@@ -73,6 +74,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Diagnose public Ikanbot playback metadata
+        run: python3 scripts/inspect-kubb.py | grep -E "PLAYTEST_|IKANBOT_MANIFEST_RESULT" || true
 
       - name: Initialize Android project
         run: pnpm tauri android init --ci
