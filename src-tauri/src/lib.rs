@@ -17,6 +17,7 @@ fn frontend_origin_allowed(origin: &str) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_nativevideo::init())
         .setup(|app| {
             if let Ok(path) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&path);
