@@ -7,7 +7,8 @@ function read(path) { return readFileSync(path, "utf8"); }
 const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
 const isStandard = tauri.productName === "MyVideo" && tauri.identifier === "com.daneg.myvideo";
 const isIsolatedPlaytest = tauri.productName === "MyVideo Playtest" && tauri.identifier === "com.daneg.myvideo.playtest";
-if (!isStandard && !isIsolatedPlaytest)
+const isNativeProbe = tauri.productName === "MyVideo Native Test" && tauri.identifier === "com.daneg.myvideo.nativeprobe";
+if (!isStandard && !isIsolatedPlaytest && !isNativeProbe)
   throw new Error("MyVideo identifier does not match approved independent app or playtest");
 const required = ["src/App.tsx", "src/main.tsx", "src/pages/SourceHub.tsx",
   "src/sourceHub.ts", "src-tauri/src/lib.rs", "src-tauri/src/net.rs",
