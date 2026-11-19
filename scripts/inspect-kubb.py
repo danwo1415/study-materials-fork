@@ -669,3 +669,69 @@ try:
   if movie: ikan_catalog_probe(movie)
 except Exception as e:print("PLAYTEST_SEARCH_ERROR",type(e).__name__,str(e)[:100],flush=True)
 ikan_catalog_probe("https://www1.ikanbot.com/play/442095")
+
+
+# Diagnosis: match mirror movie title and verify plain HTTP HEAD to HLS dependencies
+print("==== PLAYTEST NETWORK DEPENDENCIES",flush=True)
+try:
+ with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/search?q="+quote("犬夜叉：镜中的梦幻城"),headers=HEADERS),timeout=12) as r:
+  searchhtml=r.read(200000).decode("utf-8","replace")
+ searchpaths=list(dict.fromkeys(re.findall(r'/play/\d+',searchhtml)))[:15]
+ for p in searchpaths:
+  try:
+   with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com"+p,headers=HEADERS),timeout=10) as r:
+    h=r.read(190000).decode("utf-8","replace")
+   title=re.search(r'<title[^>]*>(.*?)</title',h,re.I|re.S)
+   t=re.sub(r'<[^>]+>','',title.group(1)).strip()[:80] if title else ""
+   if "镜中的梦幻城" in t:
+    print("PLAYTEST_MOVIE_MATCH",json.dumps({"path":p,"title":t},ensure_ascii=False),flush=True)
+    ikan_catalog_probe("https://www1.ikanbot.com"+p)
+    break
+  except Exception as e:
+   print("PLAYTEST_MOVIE_LOOKUP_ERROR",p,type(e).__name__,flush=True)
+except Exception as e:
+ print("PLAYTEST_MOVIE_MATCH_ERROR",type(e).__name__,str(e)[:100],flush=True)
+
+try:
+ with urllib.request.urlopen(urllib.request.Request("https://www1.ikanbot.com/play/442095",headers=HEADERS),timeout=12) as r:
+  html=r.read(190000).decode("utf-8","replace")
+ vals={}
+ for m in re.finditer(r'<input\b[^>]*>',html,re.I):
+  attrs=dict(re.findall(r'([\w-]+)\s*=\s*["\x27]([^"\x27]*)["\x27]',m.group()))
+  if attrs.get("id") in ("current_id","e_token","mtype"):vals[attrs["id"]]=attrs.get("value","")
+ remain=vals["e_token"];parts=[]
+ for d in vals["current_id"][-4:]:
+  n=int(d)%3+1;parts.append(remain[n:n+8]);remain=remain[n+8:]
+ api="https://www1.ikanbot.com/api/getResN?"+urlencode({"videoId":vals["current_id"],"mtype":vals["mtype"],"token":"".join(parts)})
+ with urllib.request.urlopen(urllib.request.Request(api,headers={**HEADERS,"Referer":"https://www1.ikanbot.com/play/442095"}),timeout=12) as r:
+  groups=json.load(r)["data"]["list"]
+ for i,g in enumerate(groups[:3]):
+  tracks=json.loads(g["resData"])
+  if not tracks:continue
+  items=[v.split("$",1) for v in tracks[0]["url"].split("#") if "$" in v]
+  if not items:continue
+  playlist=items[0][1]
+  try:
+   with urllib.request.urlopen(urllib.request.Request(playlist,headers=HEADERS),timeout=10) as r:
+    body=r.read(90000).decode("utf-8","replace")
+   keyrow=next((x for x in body.splitlines() if x.startswith("#EXT-X-KEY:")), "")
+   keymatch=re.search('URI="([^"]+)"',keyrow)
+   segment=next((x.strip() for x in body.splitlines() if x.strip() and not x.startswith("#")),"")
+   resources=[("key",urljoin(playlist,keymatch.group(1)))] if keymatch else []
+   if segment:resources.append(("segment",urljoin(playlist,segment)))
+   for kind,u in resources:
+    try:
+     req=urllib.request.Request(u,headers={"User-Agent":HEADERS["User-Agent"]},method="HEAD")
+     with urllib.request.urlopen(req,timeout=10) as r:
+      print("PLAYTEST_DEPENDENCY_HEAD",json.dumps({"line":i,"kind":kind,
+       "status":r.status,"host":urlparse(r.url).hostname,
+       "ctype":r.headers.get("Content-Type"),"length":r.headers.get("Content-Length")},ensure_ascii=False),flush=True)
+    except urllib.error.HTTPError as e:
+     print("PLAYTEST_DEPENDENCY_HEAD_ERROR",json.dumps({"line":i,"kind":kind,"status":e.code,
+      "host":urlparse(u).hostname},ensure_ascii=False),flush=True)
+    except Exception as e:
+     print("PLAYTEST_DEPENDENCY_HEAD_ERROR",json.dumps({"line":i,"kind":kind,
+      "error":type(e).__name__,"host":urlparse(u).hostname},ensure_ascii=False),flush=True)
+  except Exception as e:
+   print("PLAYTEST_DEPENDENCY_MANIFEST_ERROR",i,type(e).__name__,str(e)[:100],flush=True)
+except Exception as e:print("PLAYTEST_DEPENDENCY_ERROR",type(e).__name__,str(e)[:120],flush=True)
