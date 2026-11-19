@@ -416,6 +416,9 @@ export default function SourceHub() {
   const btn = "px-3 py-2 rounded-(--r-ctl) bg-s3 text-on text-[12px] pressable";
   const field = "w-full min-w-0 p-2.5 rounded-(--r-sm) bg-s3 text-on text-[12px] outline-none border border-white/10";
   return <div ref={hubRoot} className="flex flex-col gap-3 text-on">
+    <div className="rounded-(--r-sm) bg-s3 px-3 py-2 text-[12px] font-semibold" role="status">
+      MyVideo Native Test · Media3 原生播放验证版 v1.0.1（不是旧 Playtest）
+    </div>
     <div className="flex gap-2 flex-wrap">
       <button className={btn + (view === "categories" ? " bg-primary text-on-primary" : "")} onClick={() => setView("categories")}>分类</button>
       <button className={btn + (view === "search" ? " bg-primary text-on-primary" : "")} onClick={() => setView("search")}>聚合搜索</button>
@@ -493,7 +496,7 @@ export default function SourceHub() {
         <div className="text-[11px] text-mut">{selected.sourceName}{selected.sourceId === "nnyy" ? " · 已支持公开选集接口" : ""}</div>
         {selected.sourceId === "ikanbot" && <div className="rounded-(--r-sm) bg-s3 p-3 space-y-2">
           <div className="text-[12px] font-semibold">爱看机器人 · 原生播放测试</div>
-          <div className="text-[11px] text-mut">读取该网站公开网页的播放线路，使用 MyVideo 原生 HLS 播放器。此来源暂不支持下载；如线路失效可切换线路重新播放。</div>
+          <div className="text-[11px] text-mut">本版本在 Android Media3 原生界面播放，不再使用旧版网页视频框。此来源暂不支持下载。</div>
         </div>}
         {selected.sourceId === "ikanbot" && !detailLoading && ikanbotLines.length === 0 && <div role="status" className="text-[12px] bg-s3 rounded-(--r-sm) p-3">
           {message || "该作品当前没有公开的 HLS 播放线路，无法在 MyVideo 内原生播放。"}
@@ -521,14 +524,17 @@ export default function SourceHub() {
         {detailLoading ? <div className="text-[13px] rounded-(--r-sm) bg-s3 p-3" role="status">正在获取剧集及播放线路，请查看网络连接…</div> : media.length ? media.map((m, i) =>
           <div key={m.url} className="space-y-2 border-t border-white/10 pt-2">
             <div className="text-xs">播放地址 {i + 1} · {m.type.toUpperCase()}</div>
-            {selected.sourceId === "ikanbot" && m.type === "hls" && <button type="button" className={btn}
-              onClick={() => { void invoke("plugin:nativevideo|play", {
-                url: m.url, title: selected.title + (activeEpisode ? " · " + activeEpisode.title : "")
-              }).catch((error: unknown) => setMessage("Android 原生播放器打开失败：" + String(error))); }}>
-              使用 Android 原生播放器播放（Media3）
-            </button>}
-            <EmbeddedVideo key={m.url + "|" + (activeEpisode?.url || "")} media={m}
-              adMarkerKey={selected.sourceId === "nnyy" ? "nnyy|" + (activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title) : undefined} />
+            {selected.sourceId === "ikanbot" && m.type === "hls" ? <div className="space-y-2 rounded-(--r-md) bg-s3 p-3">
+              <div className="text-[12px] font-semibold">Android Media3 原生播放器</div>
+              <button type="button" className="w-full rounded-(--r-md) bg-primary text-on-primary font-semibold px-4 py-4 text-[15px]"
+                onClick={() => { setMessage(""); void invoke("plugin:nativevideo|play", {
+                  url: m.url, title: selected.title + (activeEpisode ? " · " + activeEpisode.title : "")
+                }).catch((error: unknown) => setMessage("Android 原生播放器打开失败：" + String(error))); }}>
+                ▶ 在 MyVideo 中原生播放本集
+              </button>
+              <div className="text-[11px] text-mut">此版本不使用上次卡在 0:00 的网页播放器。打开后可在原生界面查看具体播放错误。</div>
+            </div> : <EmbeddedVideo key={m.url + "|" + (activeEpisode?.url || "")} media={m}
+              adMarkerKey={selected.sourceId === "nnyy" ? "nnyy|" + (activeEpisode ? selected.title + " - " + activeEpisode.title : selected.title) : undefined} />}
             {selected.sourceId !== "ikanbot" && (m.type === "mp4" || m.type === "webm" || m.type === "hls") && <button className={btn} disabled={downloading}
               onClick={() => { void download(m); }}>{downloading ? "下载中 " + downloadProgress : "下载此视频（支持续传）"}</button>}
             {selected.sourceId !== "ikanbot" && m.type === "hls" && <div className="text-[11px] text-mut">仅下载无加密、完整且可合法保存的 HLS 视频。加密或特殊分片会显示不支持。</div>}
