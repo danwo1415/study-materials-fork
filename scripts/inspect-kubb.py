@@ -735,3 +735,31 @@ try:
   except Exception as e:
    print("PLAYTEST_DEPENDENCY_MANIFEST_ERROR",i,type(e).__name__,str(e)[:100],flush=True)
 except Exception as e:print("PLAYTEST_DEPENDENCY_ERROR",type(e).__name__,str(e)[:120],flush=True)
+
+
+# User-reported movie: distinguish missing public source from parser error.
+print("==== INUYASHA FEELINGS ACROSS TIME MOVIE CHECK",flush=True)
+try:
+ movie_query="犬夜叉：穿越时空的思念"
+ with urllib.request.urlopen(urllib.request.Request(
+   "https://www1.ikanbot.com/search?q="+quote(movie_query),headers=HEADERS),timeout=12) as r:
+  movie_search=r.read(230000).decode("utf-8","replace")
+ movie_paths=list(dict.fromkeys(re.findall(r'/play/\d+',movie_search)))[:24]
+ matched=[]
+ for path in movie_paths:
+  try:
+   with urllib.request.urlopen(urllib.request.Request(
+     "https://www1.ikanbot.com"+path,headers=HEADERS),timeout=10) as r:
+    movie_html=r.read(220000).decode("utf-8","replace")
+   heading=re.search(r'<h1\s+id="video_title"[^>]*>(.*?)</h1>',movie_html,re.I|re.S)
+   title=re.sub(r'<[^>]+>','',heading.group(1)).strip() if heading else ""
+   if "穿越时空的思念" in title:
+    matched.append(path)
+    print("PLAYTEST_FEELINGS_MATCH",json.dumps({"path":path,"title":title},ensure_ascii=False),flush=True)
+    ikan_catalog_probe("https://www1.ikanbot.com"+path)
+    break
+  except Exception as exc:
+   print("PLAYTEST_FEELINGS_LOOKUP_ERROR",path,type(exc).__name__,flush=True)
+ print("PLAYTEST_FEELINGS_SEARCH",json.dumps({"candidate_count":len(movie_paths),"matched":matched},ensure_ascii=False),flush=True)
+except Exception as exc:
+ print("PLAYTEST_FEELINGS_ERROR",type(exc).__name__,str(exc)[:150],flush=True)
