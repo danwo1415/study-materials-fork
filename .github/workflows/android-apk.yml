@@ -1,9 +1,9 @@
-name: Build MyVideo APK (ARM64)
+name: Build MyVideo Playtest APK (ARM64)
 
 on:
   workflow_dispatch:
   push:
-    branches: [myvideo]
+    branches: [myvideo-ikanbot-playtest]
     paths:
       - ".github/workflows/android-apk.yml"
       - "src/**"
@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: myvideo-apk-${{ github.ref }}
+  group: myvideo-playtest-apk-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -94,13 +94,13 @@ jobs:
             echo "::error::No Android APK was produced"
             exit 1
           fi
-          cp "$APK" artifacts/MyVideo_1.0.0_android_arm64_test.apk
+          cp "$APK" artifacts/MyVideo_Playtest_1.0.0_android_arm64.apk
           sha256sum artifacts/*.apk | tee artifacts/SHA256SUMS.txt
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: MyVideo-Android-ARM64-APK
+          name: MyVideo-Playtest-Android-ARM64-APK
           path: artifacts/*
           if-no-files-found: error
           retention-days: 30
