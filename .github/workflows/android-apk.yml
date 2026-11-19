@@ -1,4 +1,4 @@
-name: Build MyVideo Playtest APK (ARM64)
+name: Build MyVideo Native Test APK (ARM64)
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: myvideo-playtest-apk-${{ github.ref }}
+  group: myvideo-nativeprobe-apk-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -98,13 +98,13 @@ jobs:
             echo "::error::No Android APK was produced"
             exit 1
           fi
-          cp "$APK" artifacts/MyVideo_Playtest_1.0.0_android_arm64.apk
+          cp "$APK" artifacts/MyVideo_NativeTest_1.0.1_android_arm64.apk
           sha256sum artifacts/*.apk | tee artifacts/SHA256SUMS.txt
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: MyVideo-Playtest-Android-ARM64-APK
+          name: MyVideo-NativeTest-Android-ARM64-APK
           path: artifacts/*
           if-no-files-found: error
           retention-days: 30
