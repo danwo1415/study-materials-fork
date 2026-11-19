@@ -1,0 +1,3 @@
+[default]
+description = "Allow opening a selected public HLS stream in Android's native video player"
+permissions = ["allow-play"]
